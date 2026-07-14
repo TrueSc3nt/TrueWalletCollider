@@ -29,6 +29,8 @@ __constant__ uint8_t d_rcon[11];
 __constant__ TargetCipher d_targets[64];
 __constant__ int d_ntargets;
 __constant__ uint64_t d_seq_base[4];
+__constant__ uint8_t d_partial_prefix[32];
+__constant__ int d_partial_len;
 
 static const uint8_t h_sbox[256] = {
   0x63,0x7c,0x77,0x7b,0xf2,0x6b,0x6f,0xc5,0x30,0x01,0x67,0x2b,0xfe,0xd7,0xab,0x76,
@@ -242,6 +244,31 @@ __global__ void crack_kernel_random(uint64_t seed, uint64_t nkeys, HitRecord* hi
   }
 }
 
+/* Partial-key: fixed prefix bytes + counter in remaining suffix (research / cold-boot). */
+__global__ void crack_kernel_partial(uint64_t start_offset, uint64_t nkeys, HitRecord* hit) {
+  uint64_t tid = blockIdx.x * (uint64_t)blockDim.x + threadIdx.x;
+  uint64_t stride = (uint64_t)gridDim.x * blockDim.x;
+  int plen = d_partial_len;
+  if (plen < 0) plen = 0;
+  if (plen > 31) plen = 31;
+  for (uint64_t i = tid; i < nkeys; i += stride) {
+    if (*(volatile int*)&hit->found) return;
+    uint8_t key[32];
+#pragma unroll
+    for (int b = 0; b < 32; ++b) key[b] = 0;
+    for (int b = 0; b < plen; ++b) key[b] = d_partial_prefix[b];
+    /* counter little-endian in unknown suffix (fits partial-key R&D spaces) */
+    {
+      uint64_t c = start_offset + i;
+      for (int k = 0; k < (32 - plen); ++k) {
+        key[plen + k] = (uint8_t)(c & 0xff);
+        c >>= 8;
+      }
+    }
+    if (check_targets(key, hit)) return;
+  }
+}
+
 __global__ void crack_kernel_mixed(uint64_t seed, uint64_t nkeys, uint32_t span,
                                    HitRecord* hit) {
   uint64_t tid = blockIdx.x * (uint64_t)blockDim.x + threadIdx.x;
@@ -376,6 +403,26 @@ int cuda_aes_launch(const LaunchConfig* cfg, HitRecord* host_hit,
 
   if (cfg->mode == MODE_SEQUENTIAL) {
     CUDA_OK(cudaMemcpyToSymbol(d_seq_base, cfg->seq_base, sizeof(cfg->seq_base)));
+    for (int s = 0; s < nstreams; ++s) {
+      uint64_t off = launch_id * nkeys_total + (uint64_t)s * per_stream;
+      crack_kernel_seq<<<blocks, threads, 0, g_streams[s]>>>(off, per_stream, d_hit);
+    }
+  } else if (cfg->mode == MODE_PARTIAL) {
+    /* Walk keys with fixed prefix via sequential u256 add on prefix||00..00.
+     * This correctly covers the full 256^(32-plen) space (not just 2^64). */
+    int plen = cfg->partial_prefix_len;
+    if (plen < 0) plen = 0;
+    if (plen > 31) plen = 31;
+    uint8_t base_key[32];
+    std::memset(base_key, 0, 32);
+    for (int b = 0; b < plen; ++b) base_key[b] = cfg->partial_prefix[b];
+    uint64_t base_words[4] = {};
+    for (int i = 0; i < 4; ++i) {
+      uint64_t v = 0;
+      for (int j = 0; j < 8; ++j) v = (v << 8) | base_key[i * 8 + j];
+      base_words[i] = v;
+    }
+    CUDA_OK(cudaMemcpyToSymbol(d_seq_base, base_words, sizeof(base_words)));
     for (int s = 0; s < nstreams; ++s) {
       uint64_t off = launch_id * nkeys_total + (uint64_t)s * per_stream;
       crack_kernel_seq<<<blocks, threads, 0, g_streams[s]>>>(off, per_stream, d_hit);

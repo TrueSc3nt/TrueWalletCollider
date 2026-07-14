@@ -1,45 +1,24 @@
-# TrueWalletCollider
+# TrueWalletCollider — Recovery Lab
 
-**TrueScent lab** — a redesigned Bitcoin Core `wallet.dat` analyzer with **TrueMkeyCollider** CUDA AES-256 mkey/ckey cracking built in.
+**TrueScent** authorized owner recovery / cryptanalysis R&D for Bitcoin Core `wallet.dat`.
 
-Dark brass-noir GUI (Dear ImGui + GLFW + OpenGL). Full key extraction, export, passphrase attempt, and GPU search with auto post-hit decrypt → WIF → `FOUND_WALLET.txt`.
+Brass-noir GUI (Dear ImGui + GLFW + OpenGL) with embedded CUDA AES search (TrueMkeyCollider core).
 
-> Educational / recovery tooling. Never commit real wallets that hold funds. Key space for raw AES-256 remains 2^256 — GPU rate ≠ feasibility for unknown keys.
+> Passphrase/KDF + dual-verify + salvage + **partial** AES key are the real levers.  
+> Raw full AES-256 against unknown keys remains **2^256** — GPU rate ≠ a break. No malware, no silent RAM scrapers.
 
-## Features
+## Recovery Lab tabs
 
-- **wallet.dat parse** (clean-room port of BitcoinWalletAnalyzer concepts + extras)
-  - BDB magic check (offset 12)
-  - Master key (`mkey`): encrypted blob, salt, KDF method, iterations, IV, CT, hashcat-style target string
-  - All **ckeys**: encrypted private keys, public keys, P2PKH addresses (SHA256 → RIPEMD160 → Base58)
-  - Metadata tag scan: `version`, `bestblock`, `pool`, `name`, `hdchain`, …
-  - Target address match
-  - Export **TXT / JSON** + `ckeys.txt` / `mkeys.txt` formats for the cracker
-- **CUDA crack panel** (embedded [TrueMkeyCollider](https://github.com/TrueSc3nt/TrueMkeyCollider) kernels)
-  - Modes `-r` / `-q` / `-rs`, grids `-g`, streams, `-M auto`, device select
-  - Live speed (auto K/M/G keys/s), start/stop
-  - On hit: IV from double-SHA256(pubkey) → AES-CBC → padding → WIF → `FOUND_WALLET.txt`
-  - `--selftest` PoC pipeline
-- **Tools**: passphrase attempt (Bitcoin Core method 0 / EVP_BytesToKey SHA512), WIF verify, copy hex buttons
-- Drag-drop `.dat`, open file dialog, console log, noir/light theme toggle
-
-## Screenshots (layout)
-
-| Panel | Contents |
-|-------|----------|
-| Overview | Path, magic, mkey summary, ckey count, target address, export |
-| Master Key | Full hex fields + copy |
-| CKeys | List + detail (enc / pub / address / hash chain) |
-| Metadata | Tag table with offsets |
-| CUDA Crack | Device, grid, streams, mode, live rate, hits |
-| Tools / Console | Passphrase, WIF check, log |
-
-## Requirements
-
-- Windows 10/11 x64
-- Visual Studio 2022 **or** VS 18 Build Tools (MSVC)
-- NVIDIA CUDA Toolkit 12.x (preferred) or 13.x
-- GPU compute capability ≥ 7.5 (fatbin `sm_75`…`sm_90`)
+| Tab | Purpose |
+|-----|---------|
+| **Extract** | Parse wallet.dat, archaeology flags, folder scan (low-iter first) |
+| **Salvage** | Carve damaged BDB / raw dumps; heatmap; ranked ckeys |
+| **Passphrase Lab** | Method-0 KDF, dictionary / mask / recall wizard, H/s + ETA |
+| **AES Partial** | Known hex prefix → `MODE_PARTIAL` GPU (research / constrained) |
+| **Hashcat Bridge** | One-click `$bitcoin$…` for hashcat `-m 11300` / John; optional spawn |
+| **Results** | Dual-verify, multi-ckey WIF export, secure-erase checklist |
+| **CUDA Crack** | Random / sequential / mixed / partial AES search + auto WIF |
+| **Lab Docs** | Experiments + hibernation guidance (import-only) |
 
 ## Build
 
@@ -48,56 +27,49 @@ cd %USERPROFILE%\Desktop\TrueWalletCollider
 build_cuda.bat
 ```
 
-(`build.bat` is an alias.) Produces `TrueWalletCollider.exe` and runs `--selftest`.
+Requires VS 2022/18 C++ tools + CUDA Toolkit 12.x/13.x.
 
 ## Run
 
 ```bat
-TrueWalletCollider.exe                 rem GUI
-TrueWalletCollider.exe --selftest      rem host+GPU PoC
+TrueWalletCollider.exe                      rem Recovery Lab GUI
+TrueWalletCollider.exe --selftest           rem AES PoC + passphrase + secp
 TrueWalletCollider.exe --parse wallet.dat
+TrueWalletCollider.exe --export-hashcat wallet.dat
+TrueWalletCollider.exe --salvage dump.bin
+TrueWalletCollider.exe --experiment help
+TrueWalletCollider.exe --partial-help
 ```
 
-### GUI workflow
+## How to open Recovery Lab
 
-1. Drop or Open a `wallet.dat` (or **Load PoC targets** for the bundled crackBTCwallet sample).
-2. Review Master Key / CKeys / Metadata; export if needed.
-3. Open **CUDA Crack** → set device / `-M auto` / streams → **START**.
-4. On hit, inspect WIFs and `FOUND_WALLET.txt`.
+Launch `TrueWalletCollider.exe` (no args). Left column tabs are the Lab; right column is CUDA / Console / Docs.
 
-### Sample / PoC notes
+## Research notes
 
-Bundled PoC (also used by `--selftest`):
+See [docs/RECOVERY_RESEARCH.md](docs/RECOVERY_RESEARCH.md) and [docs/HIBERNATION_FORENSICS.md](docs/HIBERNATION_FORENSICS.md).
+
+CUDA details: [docs/CUDA.md](docs/CUDA.md). OpenCL is a future option — CUDA first.
+
+## Sample / PoC
+
+Bundled crackBTCwallet-style PoC (Load PoC / `--selftest`):
 
 | Field | Value |
 |-------|--------|
 | AES key | `563758754506d53828c5383d2cb6296efe7f217c5ef6a84b13bce3ecec66da2e` |
-| WIF_u | `5JHsqscg3o1iAWjRP83nWWJFbgMrjnXwVQoxejtAqp4t6cCVgbo` |
 | WIF_c | `KyKVQiQTML68gzEEce7HsEK9S4j4XqyZWQ6GdaGrSSk8XZJHqNWe` |
 
-Do **not** commit live `wallet.dat` files with funds. Use empty/test dumps only.
-
-## How CUDA is integrated
-
-TrueWalletCollider **statically links** the same sources as TrueMkeyCollider:
-
-| Component | Path |
-|-----------|------|
-| CUDA AES search | `cuda/aes256_cuda.cu` / `.h` |
-| Host crypto / WIF | `src/crypto/crypto_wallet.*`, `ctaes.*` |
-| Threaded controller | `src/crack/CrackEngine.*` (GUI start/stop + status) |
-
-The GUI builds `TargetCipher` blobs from parsed mkey/ckeys and drives `cuda_aes_launch` in a background thread. Post-hit uses `post_hit_decrypt_wif` + `save_found_wallet`.
-
-File formats for offline CLI targets: see [docs/FORMAT.md](docs/FORMAT.md).
+Do **not** commit live wallets with funds.
 
 ## Attribution
 
-- Wallet byte-pattern extraction concepts: [BitcoinWalletAnalyzer](https://github.com/Mizogg/BitcoinWalletAnalyzer) (Mizogg) — clean-room C++ reimplementation
-- AES crack / WIF pipeline concepts: [crackBTCwallet](https://github.com/albertobsd/crackBTCwallet) (AlbertoBSD) via [TrueMkeyCollider](https://github.com/TrueSc3nt/TrueMkeyCollider)
-- AES table implementation: Bitcoin Core `ctaes` (see `docs/CTAES_COPYING.txt`)
-- UI: [Dear ImGui](https://github.com/ocornut/imgui), [GLFW](https://github.com/glfw/glfw)
+- Wallet pattern concepts: BitcoinWalletAnalyzer (Mizogg) — clean-room C++
+- AES / WIF pipeline concepts: crackBTCwallet (AlbertoBSD) via [TrueMkeyCollider](https://github.com/TrueSc3nt/TrueMkeyCollider)
+- secp256k1 dual-verify: [micro-ecc](https://github.com/kmackay/micro-ecc) (BSD)
+- AES tables: Bitcoin Core `ctaes`
+- UI: Dear ImGui, GLFW
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Third-party licenses apply to vendored ImGui/GLFW/ctaes.
+MIT — see [LICENSE](LICENSE). Third-party licenses apply to vendored ImGui/GLFW/ctaes/micro-ecc.

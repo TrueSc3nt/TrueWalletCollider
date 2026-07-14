@@ -28,6 +28,7 @@ struct CrackConfig {
   uint64_t max_keys = 0;
   uint32_t mixed_span = 256;
   std::string seq_start; /* 64 hex for sequential */
+  std::string partial_prefix_hex; /* even-length hex prefix for MODE_PARTIAL */
   std::string found_file = "FOUND_WALLET.txt";
   std::string out_file = "key_found.txt";
 };

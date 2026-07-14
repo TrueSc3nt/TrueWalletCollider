@@ -1,4 +1,5 @@
 #include "CrackEngine.h"
+#include "../wallet/DualVerify.h"
 
 #include <chrono>
 #include <cstdio>
@@ -261,6 +262,8 @@ void CrackEngine::worker() {
   lcfg.mode = cfg_.mode;
   lcfg.mixed_span = cfg_.mixed_span;
   lcfg.streams = cfg_.streams;
+  lcfg.partial_prefix_len = 0;
+  std::memset(lcfg.partial_prefix, 0, 32);
   if (cfg_.mode == MODE_SEQUENTIAL) {
     if (cfg_.seq_start.empty()) {
       key_hex_to_u256(POC_KEY, lcfg.seq_base);
@@ -268,6 +271,15 @@ void CrackEngine::worker() {
     } else if (cfg_.seq_start.size() == 64) {
       key_hex_to_u256(cfg_.seq_start, lcfg.seq_base);
     }
+  } else if (cfg_.mode == MODE_PARTIAL) {
+    std::vector<uint8_t> pref;
+    if (!hex_to_bytes(cfg_.partial_prefix_hex, pref) || pref.empty() || pref.size() > 31) {
+      fail("MODE_PARTIAL needs even hex prefix (1..31 bytes)");
+      cuda_aes_shutdown();
+      return;
+    }
+    std::memcpy(lcfg.partial_prefix, pref.data(), pref.size());
+    lcfg.partial_prefix_len = (int)pref.size();
   }
 
   auto t0 = std::chrono::steady_clock::now();
@@ -305,6 +317,11 @@ void CrackEngine::worker() {
       int ti = hit.target_idx;
       if (ti < 0 || ti >= (int)targets_.size()) ti = 0;
       PostHitResult pr = post_hit_decrypt_wif(targets_[ti].wallet, hit.key);
+      /* Dual-verify strengthens PKCS padding hits when pubkey present */
+      if (pr.ok && !targets_[ti].wallet.pubkey.empty()) {
+        DualVerifyResult dv = dual_verify_aes_key(hit.key, targets_[ti].wallet, nullptr);
+        if (!dv.message.empty()) pr.message = dv.message;
+      }
       save_found_wallet(cfg_.found_file, targets_[ti].wallet, hit.key, pr, ti);
       {
         std::ofstream shortlog(cfg_.out_file, std::ios::app);

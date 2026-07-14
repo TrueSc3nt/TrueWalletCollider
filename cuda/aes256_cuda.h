@@ -22,7 +22,8 @@ struct HitRecord {
 enum CrackModeCuda {
   MODE_RANDOM = 0,
   MODE_SEQUENTIAL = 1,
-  MODE_MIXED = 2  /* random base, then walk lower bytes */
+  MODE_MIXED = 2,   /* random base, then walk lower bytes */
+  MODE_PARTIAL = 3  /* known prefix bytes; GPU walks unknown suffix only */
 };
 
 struct LaunchConfig {
@@ -34,6 +35,8 @@ struct LaunchConfig {
   uint64_t seq_base[4]; /* 256-bit big-endian words for sequential start */
   uint32_t mixed_span;  /* how many sequential steps after each random base */
   int streams;          /* concurrent CUDA streams (default 4) */
+  uint8_t partial_prefix[32]; /* MODE_PARTIAL: fixed leading bytes */
+  int partial_prefix_len;     /* 0..31 — remaining 32-len bytes are searched */
 };
 
 int  cuda_aes_init(int device);

@@ -108,6 +108,11 @@ if errorlevel 1 (
   echo [E] selftest failed
   exit /b 1
 )
+echo [+] Smoke: --experiment passphrase
+TrueWalletCollider.exe --experiment passphrase
+if errorlevel 1 exit /b 1
+echo [+] Smoke: --partial-help
+TrueWalletCollider.exe --partial-help
 echo.
-echo [+] Done. Run TrueWalletCollider.exe for GUI.
+echo [+] Done. Run TrueWalletCollider.exe for Recovery Lab GUI.
 endlocal

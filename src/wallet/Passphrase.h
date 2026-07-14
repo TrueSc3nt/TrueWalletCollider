@@ -14,5 +14,15 @@ struct PassphraseAttemptResult {
 PassphraseAttemptResult try_wallet_passphrase(const MasterKeyInfo& mkey,
                                               const std::string& passphrase);
 
+/** Bitcoin Core method-0 KDF (EVP_BytesToKey SHA-512). salt_len typically 8. */
+void bitcoin_bytes_to_key_sha512(const uint8_t* pass, size_t pass_len, const uint8_t* salt,
+                                 size_t salt_len, unsigned rounds, uint8_t key32[32],
+                                 uint8_t iv16[16]);
+
+/** Craft encrypted mkey48 for research selftests. */
+bool craft_encrypted_mkey48(const std::string& passphrase, const uint8_t salt8[8],
+                            uint32_t iterations, const uint8_t master32[32],
+                            uint8_t out_enc48[48]);
+
 /** Validate a WIF string (base58 + checksum + length). */
 bool verify_wif(const std::string& wif, std::string* detail_out);

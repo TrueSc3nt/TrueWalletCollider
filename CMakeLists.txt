@@ -40,13 +40,32 @@ endif()
 
 find_package(CUDAToolkit REQUIRED)
 
+# micro-ecc (secp256k1) for dual-verify pubkey match
+add_library(micro_ecc STATIC third_party/micro-ecc/uECC.c)
+target_include_directories(micro_ecc PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party/micro-ecc)
+target_compile_definitions(micro_ecc PRIVATE
+  uECC_SUPPORTS_secp160r1=0
+  uECC_SUPPORTS_secp192r1=0
+  uECC_SUPPORTS_secp224r1=0
+  uECC_SUPPORTS_secp256r1=0
+  uECC_SUPPORTS_secp256k1=1
+  uECC_SUPPORT_COMPRESSED_POINT=1
+)
+
 add_executable(TrueWalletCollider
   src/main.cpp
   src/gui/App.cpp
   src/wallet/WalletDat.cpp
   src/wallet/Passphrase.cpp
+  src/wallet/DualVerify.cpp
+  src/wallet/HashcatExport.cpp
+  src/wallet/PassphraseLab.cpp
+  src/wallet/Salvage.cpp
+  src/wallet/Archaeology.cpp
+  src/wallet/Experiment.cpp
   src/crack/CrackEngine.cpp
   src/crypto/crypto_wallet.cpp
+  src/crypto/secp256k1_lite.cpp
   src/crypto/ctaes.c
   cuda/aes256_cuda.cu
 )
@@ -56,12 +75,14 @@ target_include_directories(TrueWalletCollider PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/crypto
   ${CMAKE_CURRENT_SOURCE_DIR}/cuda
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party/glfw/deps
+  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/micro-ecc
   ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}
 )
 
 target_link_libraries(TrueWalletCollider PRIVATE
   imgui
   glfw
+  micro_ecc
   CUDA::cudart
 )
 

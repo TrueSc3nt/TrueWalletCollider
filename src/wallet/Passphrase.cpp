@@ -143,9 +143,9 @@ static void sha512(const uint8_t* data, size_t len, uint8_t out[64]) {
 }
 
 /** OpenSSL EVP_BytesToKey with SHA512 (Bitcoin Core method 0). */
-static void bytes_to_key_sha512(const uint8_t* pass, size_t pass_len, const uint8_t* salt,
-                                size_t salt_len, unsigned rounds, uint8_t* key32,
-                                uint8_t* iv16) {
+static void bytes_to_key_sha512_impl(const uint8_t* pass, size_t pass_len, const uint8_t* salt,
+                                     size_t salt_len, unsigned rounds, uint8_t* key32,
+                                     uint8_t* iv16) {
   uint8_t md_buf[64];
   size_t nkey = 32, niv = 16;
   size_t addmd = 0;
@@ -190,6 +190,12 @@ static std::string to_hex(const uint8_t* p, size_t n) {
 }
 }  // namespace
 
+void bitcoin_bytes_to_key_sha512(const uint8_t* pass, size_t pass_len, const uint8_t* salt,
+                                 size_t salt_len, unsigned rounds, uint8_t key32[32],
+                                 uint8_t iv16[16]) {
+  bytes_to_key_sha512_impl(pass, pass_len, salt, salt_len, rounds, key32, iv16);
+}
+
 PassphraseAttemptResult try_wallet_passphrase(const MasterKeyInfo& mkey,
                                               const std::string& passphrase) {
   PassphraseAttemptResult r;
@@ -207,8 +213,8 @@ PassphraseAttemptResult try_wallet_passphrase(const MasterKeyInfo& mkey,
   }
   uint32_t rounds = mkey.iterations ? mkey.iterations : 25000;
   uint8_t key[32], iv[16];
-  bytes_to_key_sha512(reinterpret_cast<const uint8_t*>(passphrase.data()), passphrase.size(),
-                      mkey.salt.data(), 8, rounds, key, iv);
+  bitcoin_bytes_to_key_sha512(reinterpret_cast<const uint8_t*>(passphrase.data()), passphrase.size(),
+                              mkey.salt.data(), 8, rounds, key, iv);
   r.derived_key_hex = to_hex(key, 32);
   r.derived_iv_hex = to_hex(iv, 16);
 
@@ -256,6 +262,28 @@ static int b58_decode(const std::string& s, std::vector<uint8_t>& out) {
   out.assign(zeros, 0);
   out.insert(out.end(), b256.begin() + i, b256.end());
   return 0;
+}
+
+bool craft_encrypted_mkey48(const std::string& passphrase, const uint8_t salt8[8],
+                            uint32_t iterations, const uint8_t master32[32],
+                            uint8_t out_enc48[48]) {
+  uint8_t key[32], iv[16];
+  bitcoin_bytes_to_key_sha512(reinterpret_cast<const uint8_t*>(passphrase.data()),
+                              passphrase.size(), salt8, 8, iterations, key, iv);
+  uint8_t plain[48];
+  std::memcpy(plain, master32, 32);
+  for (int i = 32; i < 48; ++i) plain[i] = 0x10;
+  AES256_ctx ctx;
+  AES256_init(&ctx, key);
+  uint8_t prev[16];
+  std::memcpy(prev, iv, 16);
+  for (size_t off = 0; off < 48; off += 16) {
+    uint8_t block[16];
+    for (int i = 0; i < 16; ++i) block[i] = (uint8_t)(plain[off + i] ^ prev[i]);
+    AES256_encrypt(&ctx, 1, out_enc48 + off, block);
+    std::memcpy(prev, out_enc48 + off, 16);
+  }
+  return true;
 }
 
 bool verify_wif(const std::string& wif, std::string* detail_out) {
