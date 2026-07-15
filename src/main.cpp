@@ -7,6 +7,7 @@
 #include "wallet/Salvage.h"
 #include "wallet/ForensicVerify.h"
 #include "wallet/ToolBridge.h"
+#include "wallet/OutsideBox.h"
 #include "crypto/crypto_wallet.h"
 #include "crypto/secp256k1_lite.h"
 
@@ -20,17 +21,27 @@
 static void usage() {
   std::printf(
       "TrueWalletCollider — Forensic Suite / Recovery Lab\n"
-      "(authorized owner recovery / DFIR / cryptanalysis R&D only)\n\n"
+      "(authorized owner recovery / DFIR / cryptanalysis R&D only)\n"
+      "Made by TrueScent — https://t.me/TrueScent\n\n"
       "  TrueWalletCollider.exe [flags]     launch Forensic Suite GUI\n"
       "  --selftest                         GPU+host PoC AES/WIF pipeline\n"
       "  --parse FILE                       parse wallet.dat → TXT/JSON exports\n"
       "  --verify FILE|$bitcoin$LINE        REAL/SUSPECT/FAKE/CORRUPT checklist\n"
+      "  --verify-plus FILE                 fake-wallet detector++ (entropy+consistency)\n"
       "  --export-hashcat FILE              print $bitcoin$ line (hashcat -m 11300)\n"
       "  --salvage FILE                     carve mkey/ckey from damaged dump\n"
+      "  --outside-box                      list Outside Box module inventory\n"
+      "  --vss-list                         list Volume Shadow Copies (PowerShell)\n"
+      "  --portable-scan                    scan common/USB wallet.dat leftovers\n"
+      "  --ghost-scan DIR                   cloud sync wallet.dat* ghost finder\n"
+      "  --scavenge-dump FILE               RAM/process/pagefile string scavenge\n"
+      "  --timeslice DIR                    Time-Slice crack plan by age×iters\n"
+      "  --csv-bridge FILE                  password-manager CSV → wordlist stdout\n"
+      "  --keyhole PREFIX_HEX               Keyhole plan (wires to AES Partial)\n"
       "  --experiment NAME                  research harness (help|dual_fp|passphrase|secp|hashcat_fmt)\n"
       "  --tools-status                     show bundled Hashcat/BTCRecover/John/Python\n"
       "  --partial-help                     document AES partial-key GPU mode\n\n"
-      "Honest scope: passphrase/KDF + dual-verify + salvage + partial AES key.\n"
+      "Honest scope: passphrase/KDF + dual-verify + salvage + Outside Box archaeology.\n"
       "Raw full AES-256 search of unknown keys is research/partial-key only (2^256).\n"
       "Optional bundles: run setup_forensics.bat → third_party\\{hashcat,python,btcrecover,john}\n");
 }
@@ -48,12 +59,79 @@ int main(int argc, char** argv) {
       usage();
       return 0;
     }
+    if (a == "--outside-box") {
+      std::fputs(outside_box_module_inventory().c_str(), stdout);
+      return 0;
+    }
+    if (a == "--vss-list") {
+      auto r = vss_list_shadows();
+      std::fputs(r.summary.c_str(), stdout);
+      std::fputc('\n', stdout);
+      for (auto& s : r.shadows)
+        std::printf("%s | %s | %s\n", s.id.c_str(), s.device_object.c_str(), s.create_time.c_str());
+      return r.ok ? 0 : 2;
+    }
+    if (a == "--portable-scan") {
+      auto r = portable_leftover_scan(true);
+      std::puts(r.summary.c_str());
+      for (auto& h : r.hits)
+        std::printf("%s\t%u\t%d\t%s\n", h.source.c_str(), h.iterations, h.ckeys, h.path.c_str());
+      return r.hits.empty() ? 2 : 0;
+    }
+    if (a == "--ghost-scan" && argc >= 3) {
+      auto r = cloud_sync_ghost_find({argv[2]});
+      std::puts(r.summary.c_str());
+      for (auto& h : r.hits)
+        std::printf("%s\t%zu\t%s\n", h.kind.c_str(), h.size, h.path.c_str());
+      return r.hits.empty() ? 2 : 0;
+    }
+    if (a == "--scavenge-dump" && argc >= 3) {
+      auto r = scavenge_memory_dump(argv[2]);
+      std::puts(r.summary.c_str());
+      for (size_t i = 0; i < r.hits.size() && i < 50; ++i)
+        std::printf("%zu\t%s\t%s\n", r.hits[i].offset, r.hits[i].kind.c_str(),
+                    r.hits[i].text.c_str());
+      return r.hits.empty() ? 2 : 0;
+    }
+    if (a == "--timeslice" && argc >= 3) {
+      auto r = timeslice_crack_plan(argv[2]);
+      std::puts(r.summary.c_str());
+      for (auto& it : r.items)
+        std::printf("%.6f\t%u\t%s\t%s\n", it.priority, it.iterations, it.reason.c_str(),
+                    it.path.c_str());
+      return r.items.empty() ? 2 : 0;
+    }
+    if (a == "--csv-bridge" && argc >= 3) {
+      auto r = import_password_manager_csv(argv[2]);
+      std::puts(r.summary.c_str());
+      for (auto& w : r.wordlist) std::puts(w.c_str());
+      return r.wordlist.empty() ? 2 : 0;
+    }
+    if (a == "--keyhole" && argc >= 3) {
+      KeyholeSpec spec;
+      spec.known_prefix_hex = argv[2];
+      if (argc >= 4) spec.known_suffix_hex = argv[3];
+      auto p = keyhole_build_plan(spec);
+      std::puts(p.guidance.c_str());
+      if (!p.partial_prefix_for_cuda.empty())
+        std::printf("partial_prefix=%s\n", p.partial_prefix_for_cuda.c_str());
+      return p.ok ? 0 : 2;
+    }
+    if (a == "--verify-plus" && argc >= 3) {
+      auto r = fake_wallet_detector_plus_file(argv[2]);
+      std::puts(r.summary.c_str());
+      std::fputs(verify_report_text(r.base).c_str(), stdout);
+      return r.base.verdict == VerifyVerdict::REAL      ? 0
+             : r.base.verdict == VerifyVerdict::SUSPECT ? 1
+             : r.base.verdict == VerifyVerdict::CORRUPT ? 2
+                                                       : 3;
+    }
     if (a == "--partial-help") {
       std::printf(
-          "AES Partial-Key mode (where GPU AES earns its keep)\n"
+          "AES Partial-Key / Keyhole mode (where GPU AES earns its keep)\n"
           "  Known prefix of N bytes → search space 256^(32-N).\n"
-          "  GUI: Recovery Lab → AES Partial → enter hex prefix (e.g. 56375875).\n"
-          "  CLI (TrueMkeyCollider): --partial HEXPREFIX  (MODE_PARTIAL)\n"
+          "  GUI: Outside Box → Keyhole, or AES Partial → hex prefix.\n"
+          "  CLI: --keyhole HEXPREFIX [HEXSUFFIX]\n"
           "  Does NOT claim a break of unknown full AES-256 master keys.\n");
       return 0;
     }
@@ -68,7 +146,6 @@ int main(int argc, char** argv) {
       if (arg.rfind("$bitcoin$", 0) == 0)
         r = verify_bitcoin_hash_line(arg);
       else {
-        /* Join remaining args if hash line was split? Prefer file. */
         std::ifstream f(arg, std::ios::binary);
         if (f) {
           r = verify_wallet_file(arg);

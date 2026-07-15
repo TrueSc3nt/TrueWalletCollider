@@ -16,6 +16,7 @@
 #include "../wallet/ToolBridge.h"
 #include "../wallet/CpuSimd.h"
 #include "../wallet/BreakerRebuild.h"
+#include "../wallet/OutsideBox.h"
 
 #define GLAD_GL_IMPLEMENTATION
 #include <glad/gl.h>
@@ -192,6 +193,56 @@ struct AppState {
   MultiCkeyDecryptResult multi_decrypt;
   bool has_multi_decrypt = false;
   char recovered_master_hex[68] = {};
+
+  /* Outside Box — maximalist DFIR modules */
+  char ob_case_dir[512] = "cases/outside_box";
+  char ob_ghost_root[512] = {};
+  char ob_dump_path[512] = {};
+  char ob_unalloc_path[512] = {};
+  char ob_dict_path[512] = {};
+  char ob_csv_path[512] = {};
+  char ob_almost_pass[256] = {};
+  char ob_stitch_b[512] = {};
+  char ob_em_path[512] = {};
+  char ob_fi_paste[4096] = {};
+  char ob_keyhole_prefix[128] = {};
+  char ob_keyhole_suffix[128] = {};
+  char ob_twobody_folder[512] = {};
+  char ob_timeslice_folder[512] = {};
+  char ob_heir_names[256] = {};
+  char ob_heir_places[256] = {};
+  char ob_heir_pets[128] = {};
+  char ob_heir_dates[128] = {};
+  char ob_heir_hobbies[128] = {};
+  char ob_heir_story[1024] = {};
+  char ob_mirage_mnem[1024] = {};
+  bool ob_scan_usb = true;
+  bool ob_net_http = false;
+  bool ob_dual_verify_cands = true;
+  std::string ob_panel_out;
+  VssHarvestReport ob_vss;
+  GhostFinderReport ob_ghosts;
+  PortableScanReport ob_portable;
+  UnallocatedCarveReport ob_unalloc;
+  DumpScavengeReport ob_dump_scavenge;
+  DescriptorScrapReport ob_desc;
+  CrashDumpAesReport ob_crash_aes;
+  CsvBridgeReport ob_csv;
+  EmTraceImportReport ob_em;
+  FiCandidateReport ob_fi;
+  FakeWalletPlusReport ob_fake_plus;
+  NetworkTimelineReport ob_net;
+  TimeSlicePlan ob_timeslice;
+  KeyholePlan ob_keyhole;
+  SeedMirageReport ob_mirage;
+  StitchReport ob_stitch;
+  std::vector<MasterKeyInfo> ob_mkeys;
+  std::vector<TwoBodyWallet> ob_twobody;
+  TwoBodyProgress ob_twobody_prog;
+  MultiMkeyAttackProgress ob_mm_prog;
+  std::thread ob_attack_thread;
+  std::vector<std::string> ob_mutants;
+  UnlockSessionChecklist ob_unlock = unlock_session_kit_guidance();
 
   bool wipe_found_on_erase = false;
 
@@ -1659,6 +1710,469 @@ static void draw_tools_tab(AppState& app) {
   }
 }
 
+static void draw_outside_box_tab(AppState& app) {
+  ImGui::TextColored(ImVec4(0.78f, 0.62f, 0.28f, 1.f), "Outside Box — Forensic Maximalist");
+  ImGui::TextDisabled("Made by TrueScent · https://t.me/TrueScent — authorized DFIR / owner recovery only");
+  ImGui::TextWrapped(
+      "Live memory & VSS are guided capture + import / elevated PowerShell copies — no silent RAM "
+      "stealers. Partial modules labeled Experimental.");
+  if (ImGui::Button("Show module inventory")) {
+    app.ob_panel_out = outside_box_module_inventory();
+    app.log("[+] Outside Box inventory");
+  }
+  ImGui::SameLine();
+  ImGui::InputText("Case/output", app.ob_case_dir, sizeof(app.ob_case_dir));
+  ImGui::Separator();
+
+  if (ImGui::BeginTabBar("ob_inner")) {
+    /* Disk */
+    if (ImGui::BeginTabItem("Disk")) {
+      ImGui::TextUnformatted("1 · VSS / Shadow-copy harvester");
+      if (ImGui::Button("List VSS shadows")) {
+        app.ob_vss = vss_list_shadows();
+        app.ob_panel_out = app.ob_vss.summary + "\n" + app.ob_vss.script_log;
+        app.log(app.ob_vss.summary);
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Harvest wallet.dat (UAC)")) {
+        app.ob_vss = vss_harvest_wallets(app.ob_case_dir, {});
+        app.ob_panel_out = app.ob_vss.summary + "\n" + app.ob_vss.script_log;
+        for (auto& h : app.ob_vss.hits) app.log("[VSS] " + h.dest_path);
+        app.log(app.ob_vss.summary);
+      }
+      ImGui::Text("Shadows: %zu  Copies: %zu", app.ob_vss.shadows.size(), app.ob_vss.hits.size());
+
+      ImGui::Separator();
+      ImGui::TextUnformatted("2 · NTFS undelete / unallocated carve (user dump)");
+      ImGui::InputText("Unallocated/image dump", app.ob_unalloc_path, sizeof(app.ob_unalloc_path));
+      ImGui::SameLine();
+      if (ImGui::Button("Browse##unalloc")) {
+        auto p = open_file_dialog("All\0*.*\0");
+        if (!p.empty()) strncpy(app.ob_unalloc_path, p.c_str(), sizeof(app.ob_unalloc_path) - 1);
+      }
+      if (ImGui::Button("Carve unallocated")) {
+        app.ob_unalloc = carve_unallocated_dump(app.ob_unalloc_path);
+        app.ob_panel_out = app.ob_unalloc.summary;
+        app.log(app.ob_unalloc.summary);
+      }
+
+      ImGui::Separator();
+      ImGui::TextUnformatted("3 · Cloud sync ghost finder");
+      ImGui::InputText("Root (Dropbox/OneDrive/Desktop)", app.ob_ghost_root, sizeof(app.ob_ghost_root));
+      ImGui::SameLine();
+      if (ImGui::Button("Browse##ghost")) {
+        auto f = browse_folder_dialog();
+        if (!f.empty()) strncpy(app.ob_ghost_root, f.c_str(), sizeof(app.ob_ghost_root) - 1);
+      }
+      if (ImGui::Button("Find ghosts")) {
+        std::vector<std::string> roots;
+        if (app.ob_ghost_root[0]) roots.push_back(app.ob_ghost_root);
+        app.ob_ghosts = cloud_sync_ghost_find(roots);
+        std::ostringstream ss;
+        ss << app.ob_ghosts.summary << "\n";
+        for (auto& h : app.ob_ghosts.hits)
+          ss << h.kind << "  " << h.size << "  " << h.path << "\n";
+        app.ob_panel_out = ss.str();
+        app.log(app.ob_ghosts.summary);
+      }
+
+      ImGui::Separator();
+      ImGui::TextUnformatted("4 · Portable / leftover scanner");
+      ImGui::Checkbox("Scan USB / drive letters", &app.ob_scan_usb);
+      if (ImGui::Button("Scan common paths")) {
+        app.ob_portable = portable_leftover_scan(app.ob_scan_usb);
+        std::ostringstream ss;
+        ss << app.ob_portable.summary << "\n";
+        for (auto& h : app.ob_portable.hits)
+          ss << h.source << " ckeys=" << h.ckeys << " iter=" << h.iterations << " " << h.path << "\n";
+        app.ob_panel_out = ss.str();
+        app.log(app.ob_portable.summary);
+      }
+      ImGui::EndTabItem();
+    }
+
+    /* Memory */
+    if (ImGui::BeginTabItem("Memory")) {
+      ImGui::TextUnformatted("5 · Unlock-session capture kit");
+      ImGui::TextWrapped("%s", app.ob_unlock.guidance_markdown.c_str());
+      ImGui::InputText("Dump path (RAM / process / pagefile / hiberfil / VRAM)", app.ob_dump_path,
+                       sizeof(app.ob_dump_path));
+      ImGui::SameLine();
+      if (ImGui::Button("Browse##dump")) {
+        auto p = open_file_dialog("Dump\0*.dmp;*.bin;*.raw;*.sys\0All\0*.*\0");
+        if (!p.empty()) strncpy(app.ob_dump_path, p.c_str(), sizeof(app.ob_dump_path) - 1);
+      }
+      if (ImGui::Button("Scavenge unlock dump")) {
+        app.ob_dump_scavenge = scavenge_memory_dump(app.ob_dump_path);
+        app.ob_panel_out = app.ob_dump_scavenge.summary;
+        app.log(app.ob_dump_scavenge.summary);
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("6 · pagefile/hiberfil hunt")) {
+        app.ob_dump_scavenge = hunt_pagefile_hiberfil(app.ob_dump_path);
+        app.ob_panel_out = app.ob_dump_scavenge.summary;
+        app.log(app.ob_dump_scavenge.summary);
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("7 · VRAM (experimental)")) {
+        app.ob_dump_scavenge = scavenge_vram_dump_experimental(app.ob_dump_path);
+        app.ob_panel_out = app.ob_dump_scavenge.summary + " [EXPERIMENTAL]";
+        app.log(app.ob_dump_scavenge.summary);
+      }
+      if (!app.ob_dump_scavenge.hits.empty() && ImGui::BeginTable("dumphits", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_ScrollY, ImVec2(0, 160))) {
+        ImGui::TableSetupColumn("off");
+        ImGui::TableSetupColumn("kind");
+        ImGui::TableSetupColumn("text");
+        ImGui::TableHeadersRow();
+        for (size_t i = 0; i < (std::min)(app.ob_dump_scavenge.hits.size(), (size_t)80); ++i) {
+          auto& h = app.ob_dump_scavenge.hits[i];
+          ImGui::TableNextRow();
+          ImGui::TableSetColumnIndex(0);
+          ImGui::Text("%zu", h.offset);
+          ImGui::TableSetColumnIndex(1);
+          ImGui::TextUnformatted(h.kind.c_str());
+          ImGui::TableSetColumnIndex(2);
+          if (h.text.size() > 80) {
+            std::string preview = h.text.substr(0, 80) + "…";
+            ImGui::TextUnformatted(preview.c_str());
+          } else {
+            ImGui::TextUnformatted(h.text.c_str());
+          }
+        }
+        ImGui::EndTable();
+      }
+
+      ImGui::Separator();
+      ImGui::TextUnformatted("9 · Crash-dump partial AES → dual-verify");
+      ImGui::Checkbox("Dual-verify candidates against loaded wallet", &app.ob_dual_verify_cands);
+      if (ImGui::Button("Extract AES candidates from dump")) {
+        if (!app.has_wallet) app.log("[E] load wallet first for dual-verify");
+        app.ob_crash_aes = extract_aes_candidates_from_dump(app.ob_dump_path, app.wallet, 256,
+                                                           app.ob_dual_verify_cands);
+        app.ob_panel_out = app.ob_crash_aes.summary;
+        app.log(app.ob_crash_aes.summary);
+        if (app.ob_crash_aes.verified_ok > 0) {
+          for (auto& c : app.ob_crash_aes.candidates)
+            if (c.verified) {
+              strncpy(app.recovered_master_hex, c.dual.master_hex.c_str(),
+                      sizeof(app.recovered_master_hex) - 1);
+              app.last_dual = c.dual;
+              app.has_last_dual = true;
+              break;
+            }
+        }
+      }
+      ImGui::EndTabItem();
+    }
+
+    /* Structural */
+    if (ImGui::BeginTabItem("Structural")) {
+      ImGui::TextUnformatted("8 · Passphrase-change archaeology (multi-mkey)");
+      if (ImGui::Button("Extract all mkeys from loaded wallet raw")) {
+        if (app.wallet_raw.empty())
+          app.log("[E] load wallet (raw buffer empty)");
+        else {
+          app.ob_mkeys = extract_all_mkeys(app.wallet_raw.data(), app.wallet_raw.size());
+          app.log("[+] mkeys found: " + std::to_string(app.ob_mkeys.size()));
+          app.ob_panel_out = "mkeys=" + std::to_string(app.ob_mkeys.size());
+        }
+      }
+      ImGui::InputText("Shared dict", app.ob_dict_path, sizeof(app.ob_dict_path));
+      ImGui::SameLine();
+      if (ImGui::Button("Browse##obdict")) {
+        auto p = open_file_dialog("Text\0*.txt\0All\0*.*\0");
+        if (!p.empty()) strncpy(app.ob_dict_path, p.c_str(), sizeof(app.ob_dict_path) - 1);
+      }
+      if (ImGui::Button("Attack all mkeys (shared dict)")) {
+        if (app.ob_attack_thread.joinable()) app.ob_attack_thread.join();
+        auto dict = load_dict_lines(app.ob_dict_path);
+        if (dict.empty() && !app.candidates.empty()) dict = app.candidates;
+        auto mkeys = app.ob_mkeys;
+        if (mkeys.empty() && app.has_wallet && app.wallet.mkey.found) mkeys.push_back(app.wallet.mkey);
+        app.ob_attack_thread = std::thread([&, dict, mkeys]() {
+          attack_all_mkeys_shared_dict(app.wallet, mkeys, dict, app.ob_mm_prog, app.found_path);
+          app.log(app.ob_mm_prog.message);
+        });
+      }
+      if (app.ob_mm_prog.running.load()) {
+        ImGui::Text("multi-mkey… %llu / %llu", (unsigned long long)app.ob_mm_prog.tried.load(),
+                    (unsigned long long)app.ob_mm_prog.total.load());
+        if (ImGui::Button("Stop multi-mkey")) app.ob_mm_prog.stop = true;
+      }
+
+      ImGui::Separator();
+      ImGui::TextUnformatted("10 · Descriptor / PSBT scrapyard");
+      if (ImGui::Button("Carve descriptors/PSBT/xpub from loaded raw")) {
+        if (app.wallet_raw.empty()) {
+          auto p = open_file_dialog("All\0*.*\0");
+          if (!p.empty()) app.ob_desc = carve_descriptor_psbt_file(p);
+        } else
+          app.ob_desc = carve_descriptor_psbt_scrapyard(app.wallet_raw.data(), app.wallet_raw.size());
+        app.ob_panel_out = app.ob_desc.summary;
+        app.log(app.ob_desc.summary);
+      }
+
+      ImGui::Separator();
+      ImGui::TextUnformatted("11 · Two-Body multi-wallet correlation");
+      ImGui::InputText("Case folder of wallets", app.ob_twobody_folder, sizeof(app.ob_twobody_folder));
+      ImGui::SameLine();
+      if (ImGui::Button("Browse##tb")) {
+        auto f = browse_folder_dialog();
+        if (!f.empty()) strncpy(app.ob_twobody_folder, f.c_str(), sizeof(app.ob_twobody_folder) - 1);
+      }
+      if (ImGui::Button("Load Two-Body set")) {
+        app.ob_twobody = twobody_load_case_folder(app.ob_twobody_folder);
+        app.log("[+] Two-Body wallets: " + std::to_string(app.ob_twobody.size()));
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Shared-passphrase attack")) {
+        if (app.ob_attack_thread.joinable()) app.ob_attack_thread.join();
+        auto dict = load_dict_lines(app.ob_dict_path);
+        if (dict.empty()) dict = app.candidates;
+        auto wallets = app.ob_twobody;
+        app.ob_attack_thread = std::thread([&, dict, wallets]() {
+          twobody_shared_passphrase_attack(wallets, dict, app.ob_twobody_prog, app.found_path);
+          app.log(app.ob_twobody_prog.message);
+        });
+      }
+
+      ImGui::Separator();
+      ImGui::TextUnformatted("12 · Keyboard adjacency / fat-finger");
+      ImGui::InputText("Almost-password", app.ob_almost_pass, sizeof(app.ob_almost_pass));
+      if (ImGui::Button("Generate adjacency mutants")) {
+        app.ob_mutants = fat_finger_masks(app.ob_almost_pass, 8000);
+        app.candidates = app.ob_mutants;
+        app.log("[+] fat-finger mutants: " + std::to_string(app.ob_mutants.size()));
+        app.ob_panel_out = "mutants=" + std::to_string(app.ob_mutants.size()) + " (loaded into Passphrase Lab candidates)";
+      }
+
+      ImGui::Separator();
+      ImGui::TextUnformatted("13 · Heir interview grammar");
+      ImGui::InputText("Names", app.ob_heir_names, sizeof(app.ob_heir_names));
+      ImGui::InputText("Places", app.ob_heir_places, sizeof(app.ob_heir_places));
+      ImGui::InputText("Pets", app.ob_heir_pets, sizeof(app.ob_heir_pets));
+      ImGui::InputText("Dates/years", app.ob_heir_dates, sizeof(app.ob_heir_dates));
+      ImGui::InputText("Hobbies", app.ob_heir_hobbies, sizeof(app.ob_heir_hobbies));
+      ImGui::InputTextMultiline("Free story", app.ob_heir_story, sizeof(app.ob_heir_story), ImVec2(-1, 60));
+      if (ImGui::Button("Story → candidates")) {
+        HeirInterview h;
+        h.person_names = app.ob_heir_names;
+        h.places = app.ob_heir_places;
+        h.pets = app.ob_heir_pets;
+        h.dates = app.ob_heir_dates;
+        h.hobbies = app.ob_heir_hobbies;
+        h.free_story = app.ob_heir_story;
+        CandidateGenStats st;
+        app.candidates = heir_interview_to_candidates(h, 20000, &st);
+        app.candidate_stats = st;
+        app.log("[+] heir candidates: " + std::to_string(app.candidates.size()) + " — " + st.summary);
+      }
+
+      ImGui::Separator();
+      ImGui::TextUnformatted("14 · Password-manager CSV bridge");
+      ImGui::InputText("Chrome/Bitwarden/KeePass CSV", app.ob_csv_path, sizeof(app.ob_csv_path));
+      ImGui::SameLine();
+      if (ImGui::Button("Browse##csv")) {
+        auto p = open_file_dialog("CSV\0*.csv\0All\0*.*\0");
+        if (!p.empty()) strncpy(app.ob_csv_path, p.c_str(), sizeof(app.ob_csv_path) - 1);
+      }
+      if (ImGui::Button("Import CSV → wordlist")) {
+        app.ob_csv = import_password_manager_csv(app.ob_csv_path);
+        app.candidates = app.ob_csv.wordlist;
+        app.ob_panel_out = app.ob_csv.summary;
+        app.log(app.ob_csv.summary);
+        std::string out = std::string(app.ob_case_dir) + "/csv_wordlist.txt";
+        std::ostringstream body;
+        for (auto& w : app.ob_csv.wordlist) body << w << "\n";
+        write_text_file(out, body.str());
+        app.log("[+] wrote " + out);
+      }
+
+      ImGui::Separator();
+      ImGui::TextUnformatted("15 · Backup stitch surgeon (mkey A + ckeys B)");
+      ImGui::TextDisabled("Wallet A = currently loaded (mkey source). Browse B for ckeys.");
+      ImGui::InputText("Wallet B path", app.ob_stitch_b, sizeof(app.ob_stitch_b));
+      ImGui::SameLine();
+      if (ImGui::Button("Browse##stitchb")) {
+        auto p = open_file_dialog();
+        if (!p.empty()) strncpy(app.ob_stitch_b, p.c_str(), sizeof(app.ob_stitch_b) - 1);
+      }
+      ImGui::InputText("Passphrase to try##stitch", app.single_pass, sizeof(app.single_pass));
+      if (ImGui::Button("Stitch + dual-verify")) {
+        if (!app.has_wallet) {
+          app.log("[E] load wallet A first");
+        } else {
+          WalletDatParser p;
+          auto b = p.parse_file(app.ob_stitch_b);
+          app.ob_stitch = backup_stitch_try(app.wallet, b, app.single_pass, app.found_path);
+          app.ob_panel_out = app.ob_stitch.summary;
+          app.log(app.ob_stitch.summary);
+          if (app.ob_stitch.ok) {
+            app.last_dual = app.ob_stitch.dual;
+            app.has_last_dual = true;
+            strncpy(app.recovered_master_hex, app.ob_stitch.master_hex.c_str(),
+                    sizeof(app.recovered_master_hex) - 1);
+          }
+        }
+      }
+      ImGui::TextWrapped("16 · Rebuild/re-encrypt → see Breaker & Rebuild tab (LANDED).");
+      ImGui::EndTabItem();
+    }
+
+    /* Lab exotic */
+    if (ImGui::BeginTabItem("Lab Exotic")) {
+      ImGui::TextUnformatted("17 · ChipWhisperer / EM trace importer [EXPERIMENTAL]");
+      ImGui::InputText("CSV or bin path", app.ob_em_path, sizeof(app.ob_em_path));
+      ImGui::SameLine();
+      if (ImGui::Button("Browse##em")) {
+        auto p = open_file_dialog("All\0*.*\0");
+        if (!p.empty()) strncpy(app.ob_em_path, p.c_str(), sizeof(app.ob_em_path) - 1);
+      }
+      if (ImGui::Button("Import EM CSV")) {
+        app.ob_em = import_chipwhisperer_csv(app.ob_em_path);
+        app.ob_panel_out = app.ob_em.summary;
+        if (!app.ob_em.passphrase_guesses.empty()) app.candidates = app.ob_em.passphrase_guesses;
+        app.log(app.ob_em.summary);
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Import EM bin blocks")) {
+        app.ob_em = import_em_trace_bin(app.ob_em_path);
+        app.ob_panel_out = app.ob_em.summary;
+        app.log(app.ob_em.summary);
+      }
+      if (!app.ob_em.hex_keys.empty() && ImGui::Button("Feed EM keys to host try_key")) {
+        auto targets = build_targets(app);
+        CrackConfig cfg;
+        cfg.found_file = app.found_path;
+        cfg.out_file = app.out_path;
+        app.cracker.set_config(cfg);
+        app.cracker.set_targets(targets);
+        for (auto& hx : app.ob_em.hex_keys) {
+          std::string msg;
+          if (app.cracker.try_key(hx, &msg)) {
+            app.log(msg);
+            break;
+          }
+        }
+      }
+
+      ImGui::Separator();
+      ImGui::TextUnformatted("18 · Fault-injection candidate importer");
+      ImGui::InputTextMultiline("Paste 64-hex keys (or path)", app.ob_fi_paste, sizeof(app.ob_fi_paste),
+                                ImVec2(-1, 80));
+      if (ImGui::Button("Import FI + dual-verify")) {
+        app.ob_fi = import_fault_injection_candidates(app.ob_fi_paste, app.wallet, true);
+        app.ob_panel_out = app.ob_fi.summary;
+        app.log(app.ob_fi.summary);
+        if (app.ob_fi.ok_count > 0) {
+          for (auto& c : app.ob_fi.verified)
+            if (c.verified) {
+              app.last_dual = c.dual;
+              app.has_last_dual = true;
+              strncpy(app.recovered_master_hex, c.dual.master_hex.c_str(),
+                      sizeof(app.recovered_master_hex) - 1);
+              break;
+            }
+        }
+      }
+
+      ImGui::Separator();
+      ImGui::TextUnformatted("19 · Fake-wallet detector++");
+      if (ImGui::Button("Score loaded wallet")) {
+        app.ob_fake_plus = fake_wallet_detector_plus(
+            app.wallet, app.wallet_raw.empty() ? nullptr : app.wallet_raw.data(),
+            app.wallet_raw.size());
+        app.ob_panel_out = app.ob_fake_plus.summary + "\n" + verify_report_text(app.ob_fake_plus.base);
+        for (auto& e : app.ob_fake_plus.extras) app.ob_panel_out += "\n- " + e;
+        app.log(app.ob_fake_plus.summary);
+      }
+
+      ImGui::Separator();
+      ImGui::TextUnformatted("20 · Network timeline (read-only HTTP)");
+      ImGui::Checkbox("Enable HTTP (blockchain.info)", &app.ob_net_http);
+      if (ImGui::Button("Timeline for wallet addresses")) {
+        std::vector<std::string> addrs;
+        for (auto& c : app.wallet.ckeys)
+          if (!c.address.empty()) addrs.push_back(c.address);
+        app.ob_net = network_timeline_for_addresses(addrs, app.ob_net_http);
+        std::ostringstream ss;
+        ss << app.ob_net.summary << "\n";
+        for (auto& e : app.ob_net.events)
+          ss << e.address << " " << e.kind << "=" << e.value << "\n";
+        app.ob_panel_out = ss.str();
+        app.log(app.ob_net.summary);
+      }
+
+      ImGui::Separator();
+      ImGui::TextUnformatted("21 · Time-Slice Crack plan");
+      ImGui::InputText("Folder/case", app.ob_timeslice_folder, sizeof(app.ob_timeslice_folder));
+      ImGui::SameLine();
+      if (ImGui::Button("Browse##ts")) {
+        auto f = browse_folder_dialog();
+        if (!f.empty()) strncpy(app.ob_timeslice_folder, f.c_str(), sizeof(app.ob_timeslice_folder) - 1);
+      }
+      if (ImGui::Button("Build Time-Slice plan")) {
+        app.ob_timeslice = timeslice_crack_plan(app.ob_timeslice_folder[0] ? app.ob_timeslice_folder
+                                                                            : app.ob_case_dir);
+        std::ostringstream ss;
+        ss << app.ob_timeslice.summary << "\n";
+        for (auto& it : app.ob_timeslice.items)
+          ss << it.priority << "  " << it.reason << "  " << it.path << "\n";
+        app.ob_panel_out = ss.str();
+        app.log(app.ob_timeslice.summary);
+      }
+
+      ImGui::Separator();
+      ImGui::TextUnformatted("22 · Keyhole mode (known AES bytes)");
+      ImGui::InputText("Known prefix hex", app.ob_keyhole_prefix, sizeof(app.ob_keyhole_prefix));
+      ImGui::InputText("Known suffix hex", app.ob_keyhole_suffix, sizeof(app.ob_keyhole_suffix));
+      if (ImGui::Button("Build Keyhole plan → AES Partial")) {
+        KeyholeSpec spec;
+        spec.known_prefix_hex = app.ob_keyhole_prefix;
+        spec.known_suffix_hex = app.ob_keyhole_suffix;
+        app.ob_keyhole = keyhole_build_plan(spec);
+        if (!app.ob_keyhole.partial_prefix_for_cuda.empty())
+          strncpy(app.partial_prefix, app.ob_keyhole.partial_prefix_for_cuda.c_str(),
+                  sizeof(app.partial_prefix) - 1);
+        app.ob_panel_out = app.ob_keyhole.guidance;
+        app.log(app.ob_keyhole.guidance);
+      }
+
+      ImGui::Separator();
+      ImGui::TextUnformatted("23 · Seed Mirage Meter");
+      ImGui::InputTextMultiline("Carved mnemonics (one per line)", app.ob_mirage_mnem,
+                                sizeof(app.ob_mirage_mnem), ImVec2(-1, 60));
+      if (ImGui::Button("Score Seed Mirage")) {
+        std::vector<std::string> ms;
+        std::istringstream iss(app.ob_mirage_mnem);
+        std::string line;
+        while (std::getline(iss, line)) {
+          while (!line.empty() && (unsigned char)line.back() <= ' ') line.pop_back();
+          while (!line.empty() && (unsigned char)line.front() <= ' ') line.erase(line.begin());
+          if (!line.empty()) ms.push_back(line);
+        }
+        /* also from breaker carve */
+        if (ms.empty() && app.has_carve)
+          for (auto& m : app.carve_report.mnemonics) ms.push_back(m.text);
+        app.ob_mirage = seed_mirage_meter(ms, app.wallet);
+        std::ostringstream ss;
+        ss << app.ob_mirage.summary << "\n";
+        for (auto& s : app.ob_mirage.ranked)
+          ss << s.score << " bip39=" << (s.bip39_checksum ? 1 : 0) << " " << s.mnemonic << "\n";
+        app.ob_panel_out = ss.str();
+        app.log(app.ob_mirage.summary);
+      }
+      ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
+  }
+
+  ImGui::Separator();
+  ImGui::BeginChild("ob_out", ImVec2(0, 0), true);
+  ImGui::TextUnformatted(app.ob_panel_out.c_str());
+  ImGui::EndChild();
+}
+
 static void draw_crack_panel(AppState& app) {
   if (app.devices.empty()) app.devices = CrackEngine::list_devices();
 
@@ -1812,16 +2326,17 @@ static void draw_lab_docs_tab(AppState& app) {
   ImGui::Separator();
   ImGui::TextUnformatted("Workflow");
   ImGui::BulletText("Extract / Salvage / Passphrase Lab / AES Partial / dual-verify (core Recovery Lab).");
-  ImGui::BulletText("Verify: REAL/SUSPECT/FAKE/CORRUPT checklist (CLI --verify).");
+  ImGui::BulletText("Outside Box: VSS, ghosts, leftovers, memory import, multi-mkey, Two-Body, CSV, Keyhole, Time-Slice, …");
+  ImGui::BulletText("Verify: REAL/SUSPECT/FAKE/CORRUPT checklist (CLI --verify / --verify-plus).");
   ImGui::BulletText("Case: notes + evidence zip under cases/.");
   ImGui::BulletText("BTCRecover Lab + Hashcat Bridge: local third_party bundles after setup_forensics.bat.");
   ImGui::BulletText("Tools: BIP39, brainwallet, Base58/Bech32, hex/entropy, diff, strings, balance, triage.");
   ImGui::Separator();
   ImGui::TextUnformatted("Hibernation / RAM forensic guidance");
   ImGui::TextWrapped(
-      "Cold-boot AES candidates belong in AES Partial tab. Only analyze hibernation files, "
-      "pagefile, or RAM dumps from systems you own or are explicitly authorized to recover. "
-      "Unauthorized forensic imaging is illegal.");
+      "Use Outside Box → Memory (unlock kit / pagefile / hiberfil / VRAM import). Cold-boot AES keys "
+      "also belong in AES Partial. Only analyze dumps from systems you own or are authorized to recover. "
+      "No silent live RAM capture. Unauthorized forensic imaging is illegal.");
   ImGui::Separator();
   ImGui::TextUnformatted("Secure erase checklist");
   ImGui::BulletText("Move recovered keys offline; verify on air-gapped host.");
@@ -1906,6 +2421,9 @@ int RunGuiApp() {
   while (!glfwWindowShouldClose(window)) {
     glfwPollEvents();
     if (app.pp_thread.joinable() && !app.pp_progress.running.load()) app.pp_thread.join();
+    if (app.ob_attack_thread.joinable() && !app.ob_mm_prog.running.load() &&
+        !app.ob_twobody_prog.running.load())
+      app.ob_attack_thread.join();
 
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
@@ -1948,6 +2466,10 @@ int RunGuiApp() {
       }
       if (ImGui::BeginTabItem("Breaker & Rebuild")) {
         draw_breaker_rebuild_tab(app);
+        ImGui::EndTabItem();
+      }
+      if (ImGui::BeginTabItem("Outside Box")) {
+        draw_outside_box_tab(app);
         ImGui::EndTabItem();
       }
       if (ImGui::BeginTabItem("Verify")) {
