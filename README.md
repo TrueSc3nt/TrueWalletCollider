@@ -1,4 +1,4 @@
-**Made by TrueScent** · Telegram: [https://t.me/TrueScent](https://t.me/TrueScent)
+**Made by TrueScent** · Telegram: [https://t.me/TrueScent](https://t.me/TrueScent)  BTC DONATION:bc1qke9ets26d6vs8ardndteds57frcald98n8g3te
 
 # TrueWalletCollider — Forensic Suite / Recovery Lab
 
