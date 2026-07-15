@@ -44,6 +44,14 @@ Full inventory: [DFIR_CATALOG.md](DFIR_CATALOG.md).
 6. **Results** — dual-verify, decrypt all ckeys, secure erase.
 7. **Breaker → TrueReweave** — inventory every record; rematerialize with **new passphrase** + WIF/JSON. **Forbidden:** fake BIP39 rewrite inside Core `wallet.dat`.
 
+### Breaker one-click
+
+On **Breaker & Rebuild**, use **Open wallet.dat & Run Full Breaker**: file dialog → Open Any Wallet → inventory summary → try **Unlock passphrase** (default example `adam`, editable; Ctrl+V or **Paste**) → on success decrypt all ckeys + TrueReweave rematerialize under **New passphrase for rebuilt wallet** (can mirror unlock) → export WIF/JSON. On fail it still extracts / exports hash and queues native KDF + Hashcat with that password as the first candidate (`trying…` in the progress log). Wrong passphrase cannot magic-unlock.
+
+### Clipboard (Ctrl+V)
+
+All `InputText` fields use Win32 `CF_UNICODETEXT` with a real HWND owner + OpenClipboard retries. Critical fields also have a **Paste** button. Run `TrueWalletCollider.exe --clipboard-selftest` to verify Set/Get round-trip.
+
 ### Derivation hints (rematerialize)
 
 BTC `m/44'/0'/0'/0/0` (BIP44), `m/49'/0'/0'/0/0` (BIP49), `m/84'/0'/0'/0/0` (BIP84), `m/86'/0'/0'/0/0` (BIP86); ETH `m/44'/60'/0'/0/0`; SOL `m/44'/501'/0'/0'`.

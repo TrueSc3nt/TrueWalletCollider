@@ -1,5 +1,6 @@
 #include "App.h"
 #include "Theme.h"
+#include "ClipboardWin32.h"
 
 #include "../crack/CrackEngine.h"
 #include "../wallet/Passphrase.h"
@@ -29,6 +30,10 @@
 #define GLFW_INCLUDE_NONE
 #endif
 #include <GLFW/glfw3.h>
+#ifdef _WIN32
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
+#endif
 
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -193,6 +198,17 @@ struct AppState {
   char orch_tokenlist[512] = {};
   bool about_open = false;
 
+  /* One-click Full Breaker — unlock then rematerialize under new passphrase */
+  char breaker_unlock_pass[256] = "adam";
+  char breaker_new_pass[256] = "adam";
+  bool breaker_new_same_as_unlock = true;
+  bool breaker_try_dict = true;
+  bool breaker_queue_hashcat = true;
+  char breaker_out_prefix[260] = "breaker_oneclick";
+  std::string breaker_progress;
+  bool breaker_busy = false;
+  std::thread breaker_thread;
+
   /* Open Any Wallet / multi-format */
   DetectedWallet detected;
   bool has_detected = false;
@@ -330,61 +346,46 @@ static void shutdown_app_workers(AppState& app) {
   app.cracker.join_timeout(2000);
   join_thread_timeout(app.pp_thread, 2000);
   join_thread_timeout(app.ob_attack_thread, 2000);
+  join_thread_timeout(app.breaker_thread, 2000);
 }
 
 #ifdef _WIN32
-static std::string g_imgui_clipboard;
+static void set_clipboard(const std::string& s) { clipboard_win32_set_utf8(s.c_str()); }
 
-static void win32_set_clipboard_utf8(const char* text) {
-  if (!text) return;
-  if (!OpenClipboard(nullptr)) return;
-  EmptyClipboard();
-  int wlen = MultiByteToWideChar(CP_UTF8, 0, text, -1, nullptr, 0);
-  if (wlen <= 0) {
-    CloseClipboard();
-    return;
-  }
-  HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, (SIZE_T)wlen * sizeof(wchar_t));
-  if (h) {
-    wchar_t* dst = (wchar_t*)GlobalLock(h);
-    if (dst) {
-      MultiByteToWideChar(CP_UTF8, 0, text, -1, dst, wlen);
-      GlobalUnlock(h);
-      SetClipboardData(CF_UNICODETEXT, h);
-    } else {
-      GlobalFree(h);
-    }
-  }
-  CloseClipboard();
+/** Paste clipboard into buf; strips trailing CR/LF. Returns true if non-empty paste applied. */
+static bool paste_clipboard_into(char* buf, size_t buf_size) {
+  if (!buf || buf_size == 0) return false;
+  const char* clip = clipboard_win32_get_utf8();
+  if (!clip || !clip[0]) return false;
+  std::strncpy(buf, clip, buf_size - 1);
+  buf[buf_size - 1] = '\0';
+  size_t n = std::strlen(buf);
+  while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r' || buf[n - 1] == ' '))
+    buf[--n] = '\0';
+  return true;
 }
 
-static const char* win32_get_clipboard_utf8() {
-  g_imgui_clipboard.clear();
-  if (!OpenClipboard(nullptr)) return "";
-  HANDLE h = GetClipboardData(CF_UNICODETEXT);
-  if (h) {
-    const wchar_t* w = (const wchar_t*)GlobalLock(h);
-    if (w) {
-      int len = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
-      if (len > 1) {
-        g_imgui_clipboard.resize((size_t)len - 1);
-        WideCharToMultiByte(CP_UTF8, 0, w, -1, g_imgui_clipboard.data(), len, nullptr, nullptr);
-      }
-      GlobalUnlock(h);
-    }
-  } else if ((h = GetClipboardData(CF_TEXT)) != nullptr) {
-    const char* a = (const char*)GlobalLock(h);
-    if (a) {
-      g_imgui_clipboard = a;
-      GlobalUnlock(h);
-    }
+/** InputText + Paste button (Ctrl+V should also work via Platform clipboard handlers). */
+static bool InputTextWithPaste(const char* label, char* buf, size_t buf_size,
+                               ImGuiInputTextFlags flags = 0) {
+  ImGui::PushID(label);
+  bool changed = ImGui::InputText("##it", buf, buf_size, flags);
+  ImGui::SameLine();
+  if (ImGui::SmallButton("Paste")) {
+    if (paste_clipboard_into(buf, buf_size)) changed = true;
   }
-  CloseClipboard();
-  return g_imgui_clipboard.c_str();
+  ImGui::SameLine(0, ImGui::GetStyle().ItemInnerSpacing.x);
+  ImGui::TextUnformatted(label);
+  ImGui::PopID();
+  return changed;
 }
-
-static void imgui_set_clipboard(ImGuiContext*, const char* text) { win32_set_clipboard_utf8(text); }
-static const char* imgui_get_clipboard(ImGuiContext*) { return win32_get_clipboard_utf8(); }
+#else
+static void set_clipboard(const std::string&) {}
+static bool paste_clipboard_into(char*, size_t) { return false; }
+static bool InputTextWithPaste(const char* label, char* buf, size_t buf_size,
+                               ImGuiInputTextFlags flags = 0) {
+  return ImGui::InputText(label, buf, buf_size, flags);
+}
 #endif
 
 static void glfw_error(int code, const char* desc) {
@@ -434,8 +435,6 @@ static std::string browse_folder_dialog() {
   return path;
 }
 
-static void set_clipboard(const std::string& s) { win32_set_clipboard_utf8(s.c_str()); }
-
 static bool secure_erase_file(const std::string& path) {
   std::fstream f(path, std::ios::in | std::ios::out | std::ios::binary);
   if (!f) return false;
@@ -453,7 +452,6 @@ static bool secure_erase_file(const std::string& path) {
 static std::string open_file_dialog(const char* = nullptr) { return {}; }
 static std::string save_file_dialog(const char*, const char*) { return {}; }
 static std::string browse_folder_dialog() { return {}; }
-static void set_clipboard(const std::string&) {}
 static bool secure_erase_file(const std::string&) { return false; }
 #endif
 
@@ -527,6 +525,172 @@ static void load_wallet_path(AppState& app, const std::string& path) {
   }
   app.reweave_inv = truereweave_inventory(app.wallet, &app.detected);
   app.has_reweave_inv = true;
+}
+
+static void breaker_plog(AppState& app, const std::string& line) {
+  app.breaker_progress += line;
+  if (app.breaker_progress.size() > 0 && app.breaker_progress.back() != '\n')
+    app.breaker_progress += '\n';
+  app.log(line);
+}
+
+/** One-click: load → inventory → try unlock → decrypt/TrueReweave OR queue crack with cand. */
+static void run_full_breaker_pipeline(AppState& app, const std::string& path) {
+  app.breaker_progress.clear();
+  if (path.empty()) {
+    breaker_plog(app, "[E] no wallet path");
+    return;
+  }
+  if (app.breaker_new_same_as_unlock)
+    std::strncpy(app.breaker_new_pass, app.breaker_unlock_pass, sizeof(app.breaker_new_pass) - 1);
+
+  const std::string unlock = app.breaker_unlock_pass;
+  const std::string new_pass = app.breaker_new_pass[0] ? app.breaker_new_pass : unlock;
+
+  breaker_plog(app, "=== Full Breaker start ===");
+  breaker_plog(app, "[1] Open Any Wallet: " + path);
+  load_wallet_path(app, path);
+
+  if (app.has_reweave_inv) {
+    breaker_plog(app, "[2] Inventory: " + app.reweave_inv.summary);
+    for (size_t i = 0; i < app.reweave_inv.records.size() && i < 12; ++i)
+      breaker_plog(app, "    · " + app.reweave_inv.records[i]);
+  }
+
+  if (app.has_detected && !app.detected.hash_export_path.empty()) {
+    breaker_plog(app, std::string("[2b] Hash export: ") + app.detected.hash_export_path +
+                          (app.detected.hashcat_mode
+                               ? (std::string(" (-m ") + std::to_string(app.detected.hashcat_mode) + ")")
+                               : std::string()));
+  }
+
+  if (!app.has_wallet || !app.wallet.mkey.found) {
+    breaker_plog(app,
+                 "[!] No Core mkey — cannot unlock with passphrase here. Extract/hash path ready; "
+                 "wrong format or unencrypted/plain inventory only. Honesty: no magic unlock.");
+    if (app.has_detected && !app.detected.hash_line.empty()) {
+      breaker_plog(app, "[…] Queuing crack hint: " + app.detected.crack_hint);
+      if (app.breaker_queue_hashcat && !app.detected.hash_export_path.empty()) {
+        std::ofstream wl("breaker_first_cand.txt", std::ios::binary);
+        wl << unlock << "\n";
+        wl.close();
+        auto r = spawn_hashcat_streamed(app.detected.hash_export_path, "breaker_first_cand.txt",
+                                        app.hashcat_exe_cached, &app.hashcat_stream);
+        breaker_plog(app, std::string("[…] Hashcat: ") + (r.launched ? "trying…" : "not launched") +
+                              " — " + r.message);
+      }
+    }
+    breaker_plog(app, "=== Full Breaker done (no Core unlock) ===");
+    return;
+  }
+
+  breaker_plog(app, std::string("[3] Trying unlock passphrase (single try)") +
+                        (unlock.empty() ? std::string(" — EMPTY")
+                                        : (std::string(": \"") + unlock + "\"")));
+  app.last_dual = dual_verify_passphrase(app.wallet.mkey, app.wallet, unlock, app.found_path);
+  app.has_last_dual = true;
+
+  if (app.last_dual.ok && !app.last_dual.master_hex.empty()) {
+    breaker_plog(app, "[+] Unlock OK — master recovered");
+    std::strncpy(app.recovered_master_hex, app.last_dual.master_hex.c_str(),
+                 sizeof(app.recovered_master_hex) - 1);
+    uint8_t master[32];
+    if (!hex_to_master32(app.recovered_master_hex, master)) {
+      breaker_plog(app, "[E] master hex decode failed");
+      return;
+    }
+
+    breaker_plog(app, "[4] Decrypt all ckeys → WIF");
+    app.multi_decrypt = decrypt_all_ckeys(master, app.wallet, app.found_path);
+    app.has_multi_decrypt = true;
+    breaker_plog(app, app.multi_decrypt.report);
+
+    breaker_plog(app, std::string("[5] TrueReweave rematerialize under NEW passphrase") +
+                          (new_pass.empty() ? " (export-only)" : ""));
+    std::strncpy(app.reweave_new_pass, new_pass.c_str(), sizeof(app.reweave_new_pass) - 1);
+    std::strncpy(app.rebuild_new_pass, new_pass.c_str(), sizeof(app.rebuild_new_pass) - 1);
+    app.reweave_result =
+        truereweave_rematerialize(master, app.wallet, new_pass, (uint32_t)app.reweave_iters);
+    app.has_reweave = true;
+    if (breaker_write_package(app.reweave_result.package, app.breaker_out_prefix))
+      breaker_plog(app, "[+] Wrote " + std::string(app.breaker_out_prefix) + ".{json,txt}");
+    breaker_plog(app, app.reweave_result.message);
+    if (!app.reweave_result.package.txt_bundle.empty()) {
+      breaker_plog(app, "--- WIFs / export ---");
+      breaker_plog(app, app.reweave_result.package.txt_bundle);
+    }
+    breaker_plog(app, "=== Full Breaker SUCCESS ===");
+    return;
+  }
+
+  breaker_plog(app, "[!] Unlock miss — wrong passphrase cannot magic-unlock. Continuing extract + crack.");
+  breaker_plog(app, app.last_dual.message);
+
+  /* Prefer unlock as first native/hashcat candidate */
+  std::vector<std::string> cands;
+  if (!unlock.empty()) cands.push_back(unlock);
+  if (app.breaker_try_dict && !app.candidates.empty()) {
+    for (auto& c : app.candidates) {
+      if (c != unlock) cands.push_back(c);
+    }
+  } else if (app.breaker_try_dict && app.dict_path[0]) {
+    std::ifstream df(app.dict_path);
+    std::string line;
+    while (std::getline(df, line) && (int)cands.size() < app.orch_opt.max_native_tries) {
+      while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) line.pop_back();
+      if (!line.empty() && line != unlock) cands.push_back(line);
+    }
+  }
+
+  write_hashcat_file(app.wallet, app.hashcat_export_path, true);
+  breaker_plog(app, "[4] Exported $bitcoin$ → " + std::string(app.hashcat_export_path));
+
+  {
+    std::ofstream wl("breaker_first_cand.txt", std::ios::binary);
+    for (auto& c : cands) wl << c << "\n";
+    if (cands.empty()) wl << "\n";
+    wl.close();
+  }
+
+  app.orch_opt.dict_path = app.orch_dict[0] ? app.orch_dict : "breaker_first_cand.txt";
+  app.orch_opt.tokenlist = app.orch_tokenlist;
+  app.orch_opt.hash_export_path = app.hashcat_export_path;
+  app.orch_opt.passphrase_candidates = cands;
+  app.orch_opt.do_verify = true;
+  app.orch_opt.do_carve = true;
+  app.orch_opt.do_native_kdf = true;
+  app.orch_opt.do_hashcat = app.breaker_queue_hashcat;
+  app.orch_opt.use_cpu = true;
+
+  breaker_plog(app, std::string("[5] trying… native KDF") +
+                        (app.breaker_queue_hashcat ? " + Hashcat queue" : "") + " (" +
+                        std::to_string(cands.size()) + " candidates, first=\"" + unlock + "\")");
+
+  app.orch_report =
+      breaker_orchestrate(app.wallet, app.wallet_raw, app.orch_opt, &app.hashcat_stream, &app.btc_stream);
+  app.has_orch = true;
+  breaker_plog(app, app.orch_report.log);
+
+  if (app.orch_report.success && !app.orch_report.master_hex.empty()) {
+    std::strncpy(app.recovered_master_hex, app.orch_report.master_hex.c_str(),
+                 sizeof(app.recovered_master_hex) - 1);
+    uint8_t master[32];
+    if (hex_to_master32(app.recovered_master_hex, master)) {
+      breaker_plog(app, "[+] Crack hit — rematerializing with new passphrase");
+      app.multi_decrypt = decrypt_all_ckeys(master, app.wallet, app.found_path);
+      app.has_multi_decrypt = true;
+      app.reweave_result =
+          truereweave_rematerialize(master, app.wallet, new_pass, (uint32_t)app.reweave_iters);
+      app.has_reweave = true;
+      breaker_write_package(app.reweave_result.package, app.breaker_out_prefix);
+      breaker_plog(app, app.reweave_result.message);
+    }
+  } else {
+    breaker_plog(app,
+                 "Honesty: passphrase wrong / not in list — wallet loaded + hash exported; crackers "
+                 "may still be running.");
+  }
+  breaker_plog(app, "=== Full Breaker done ===");
 }
 
 #ifdef _WIN32
@@ -636,6 +800,17 @@ static void draw_brand_bar(AppState& app) {
     }
     if (ImGui::BeginMenu("Edit")) {
       ImGui::TextDisabled("Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+A in text fields");
+#ifdef _WIN32
+      if (ImGui::MenuItem("Paste into focused field", "Ctrl+V")) {
+        /* Force-refresh clipboard through our Win32 path; ImGui InputText handles Ctrl+V when focused. */
+        (void)clipboard_win32_get_utf8();
+      }
+      if (ImGui::MenuItem("Clipboard self-test")) {
+        std::string detail;
+        bool ok = clipboard_win32_selftest(&detail);
+        app.log(std::string(ok ? "[+] " : "[E] ") + detail);
+      }
+#endif
       ImGui::EndMenu();
     }
     ImGui::EndMainMenuBar();
@@ -1090,7 +1265,7 @@ static void draw_passphrase_lab_tab(AppState& app) {
   }
   ImGui::Text("Iterations: %u | method: %u", app.wallet.mkey.iterations, app.wallet.mkey.method);
 
-  ImGui::InputText("Single passphrase", app.single_pass, sizeof(app.single_pass), ImGuiInputTextFlags_Password);
+  InputTextWithPaste("Single passphrase", app.single_pass, sizeof(app.single_pass));
   if (ImGui::Button("Try single (dual_verify)")) {
     app.last_dual = dual_verify_passphrase(app.wallet.mkey, app.wallet, app.single_pass, app.found_path);
     app.has_last_dual = true;
@@ -1102,6 +1277,8 @@ static void draw_passphrase_lab_tab(AppState& app) {
 
   ImGui::Separator();
   ImGui::InputText("Dictionary file", app.dict_path, sizeof(app.dict_path));
+  ImGui::SameLine();
+  if (ImGui::SmallButton("Paste##dict")) paste_clipboard_into(app.dict_path, sizeof(app.dict_path));
   ImGui::SameLine();
   if (ImGui::Button("Pick dict")) {
     auto p = open_file_dialog("Text\0*.txt\0All\0*.*\0");
@@ -1217,7 +1394,8 @@ static void draw_aes_partial_tab(AppState& app) {
       "partial key material), sequential windows, or targeted random spans. Use Passphrase Lab "
       "or Hashcat Bridge for wallet passwords.");
   ImGui::Separator();
-  ImGui::InputText("Hex prefix (even len, 1..31 bytes)", app.partial_prefix, sizeof(app.partial_prefix));
+  InputTextWithPaste("Hex prefix (even len, 1..31 bytes)", app.partial_prefix,
+                     sizeof(app.partial_prefix));
   ImGui::TextDisabled("MODE_PARTIAL: GPU walks unknown suffix bytes only.");
 
   if (ImGui::Button("Start PARTIAL CUDA") && app.has_wallet) {
@@ -1300,7 +1478,7 @@ static void draw_hashcat_bridge_tab(AppState& app) {
     ImGui::TextWrapped("%s", line.c_str());
     ImGui::EndChild();
     if (ImGui::Button("Copy $bitcoin$ line")) set_clipboard(line);
-    ImGui::InputText("Export path", app.hashcat_export_path, sizeof(app.hashcat_export_path));
+    InputTextWithPaste("Export path", app.hashcat_export_path, sizeof(app.hashcat_export_path));
     if (ImGui::Button("Write hash file")) {
       if (write_hashcat_file(app.wallet, app.hashcat_export_path, true))
         app.log("[+] wrote " + std::string(app.hashcat_export_path));
@@ -1313,7 +1491,7 @@ static void draw_hashcat_bridge_tab(AppState& app) {
   ImGui::Text("hashcat: %s",
               app.hashcat_exe_cached.empty() ? "(not found — run setup_forensics.bat)"
                                              : app.hashcat_exe_cached.c_str());
-  ImGui::InputText("Wordlist (optional)", app.hashcat_wordlist, sizeof(app.hashcat_wordlist));
+  InputTextWithPaste("Wordlist (optional)", app.hashcat_wordlist, sizeof(app.hashcat_wordlist));
   if (ImGui::Button("Browse wordlist")) {
     auto p = open_file_dialog("Text\0*.txt\0All\0*.*\0");
     if (!p.empty()) {
@@ -1565,6 +1743,53 @@ static void draw_breaker_rebuild_tab(AppState& app) {
   ImGui::TextColored(ImVec4(0.45f, 0.75f, 0.9f, 1.f), "%s", cpu_simd_detect().status_line.c_str());
   ImGui::Separator();
 
+  ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.35f, 1.f), "One-click Full Breaker");
+  ImGui::TextWrapped(
+      "Open wallet.dat → auto Extract/Open Any Wallet → inventory → try Unlock passphrase → "
+      "on success decrypt all + TrueReweave with New passphrase. On fail: extract + queue crack "
+      "(that password first). Wrong passphrase cannot magic-unlock.");
+  InputTextWithPaste("Unlock passphrase (try first)", app.breaker_unlock_pass,
+                     sizeof(app.breaker_unlock_pass));
+  ImGui::Checkbox("New passphrase = unlock", &app.breaker_new_same_as_unlock);
+  if (app.breaker_new_same_as_unlock) {
+    std::strncpy(app.breaker_new_pass, app.breaker_unlock_pass, sizeof(app.breaker_new_pass) - 1);
+    ImGui::BeginDisabled();
+    InputTextWithPaste("New passphrase for rebuilt wallet", app.breaker_new_pass,
+                       sizeof(app.breaker_new_pass));
+    ImGui::EndDisabled();
+  } else {
+    InputTextWithPaste("New passphrase for rebuilt wallet", app.breaker_new_pass,
+                       sizeof(app.breaker_new_pass));
+  }
+  ImGui::Checkbox("On miss: also try dict/candidates", &app.breaker_try_dict);
+  ImGui::SameLine();
+  ImGui::Checkbox("Queue Hashcat", &app.breaker_queue_hashcat);
+  InputTextWithPaste("Export prefix", app.breaker_out_prefix, sizeof(app.breaker_out_prefix));
+
+  if (ImGui::Button("Open wallet.dat & Run Full Breaker", ImVec2(-1, 44))) {
+    if (app.breaker_busy) {
+      app.log("[!] Breaker already running");
+    } else {
+      auto p = open_file_dialog(
+          "Wallet\0*.dat;*.json;*.wallet;*.seco;*.keys\0DAT\0*.dat\0JSON\0*.json\0All\0*.*\0");
+      if (!p.empty()) {
+        app.breaker_busy = true;
+        run_full_breaker_pipeline(app, p);
+        app.breaker_busy = false;
+      }
+    }
+  }
+  if (app.breaker_busy) ImGui::TextColored(ImVec4(0.9f, 0.7f, 0.3f, 1.f), "trying…");
+  ImGui::BeginChild("breaker_oneclick_log", ImVec2(0, 140), true);
+  ImGui::TextUnformatted(app.breaker_progress.empty() ? "(progress log — each step appears here)"
+                                                      : app.breaker_progress.c_str());
+  ImGui::EndChild();
+  if (app.has_reweave && !app.reweave_result.package.txt_bundle.empty()) {
+    if (ImGui::Button("Copy TrueReweave export"))
+      set_clipboard(app.reweave_result.package.txt_bundle);
+  }
+  ImGui::Separator();
+
   if (ImGui::BeginTabBar("breaker_inner")) {
     if (ImGui::BeginTabItem("1 · Break")) {
       ImGui::Checkbox("Verify REAL/FAKE", &app.orch_opt.do_verify);
@@ -1582,14 +1807,14 @@ static void draw_breaker_rebuild_tab(AppState& app) {
       ImGui::Checkbox("Use CPU", &app.orch_opt.use_cpu);
       ImGui::SameLine();
       ImGui::Checkbox("Use GPU", &app.orch_opt.use_gpu);
-      ImGui::InputText("Dictionary / passwordlist", app.orch_dict, sizeof(app.orch_dict));
+      InputTextWithPaste("Dictionary / passwordlist", app.orch_dict, sizeof(app.orch_dict));
       ImGui::SameLine();
       if (ImGui::Button("Browse##orchd")) {
         auto p = open_file_dialog("Text\0*.txt\0All\0*.*\0");
         if (!p.empty()) strncpy(app.orch_dict, p.c_str(), sizeof(app.orch_dict) - 1);
       }
-      ImGui::InputText("BTCRecover tokenlist", app.orch_tokenlist, sizeof(app.orch_tokenlist));
-      ImGui::InputText("Partial AES prefix", app.partial_prefix, sizeof(app.partial_prefix));
+      InputTextWithPaste("BTCRecover tokenlist", app.orch_tokenlist, sizeof(app.orch_tokenlist));
+      InputTextWithPaste("Partial AES prefix", app.partial_prefix, sizeof(app.partial_prefix));
       ImGui::InputInt("Max native tries", &app.orch_opt.max_native_tries);
       if (ImGui::Button("RUN ORCHESTRATOR", ImVec2(220, 36))) {
         if (!app.has_wallet) {
@@ -1598,9 +1823,6 @@ static void draw_breaker_rebuild_tab(AppState& app) {
           app.orch_opt.dict_path = app.orch_dict;
           app.orch_opt.tokenlist = app.orch_tokenlist;
           app.orch_opt.partial_prefix_hex = app.partial_prefix;
-          if (app.dict_path[0]) {
-            /* also pull recall candidates if generated */
-          }
           if (!app.candidates.empty())
             app.orch_opt.passphrase_candidates = app.candidates;
           else if (app.single_pass[0])
@@ -1658,12 +1880,12 @@ static void draw_breaker_rebuild_tab(AppState& app) {
       ImGui::TextWrapped(
           "After master recovery: decrypt all keys, optionally re-encrypt mkey under a new "
           "passphrase you choose, export WIF/hex/JSON. Not a scam fake-balance wallet.");
-      ImGui::InputText("Recovered master (64 hex)", app.recovered_master_hex,
-                       sizeof(app.recovered_master_hex));
-      ImGui::InputText("New passphrase (replace password)", app.rebuild_new_pass,
-                       sizeof(app.rebuild_new_pass), ImGuiInputTextFlags_Password);
+      InputTextWithPaste("Recovered master (64 hex)", app.recovered_master_hex,
+                         sizeof(app.recovered_master_hex));
+      InputTextWithPaste("New passphrase (replace password)", app.rebuild_new_pass,
+                         sizeof(app.rebuild_new_pass));
       ImGui::InputInt("New KDF iterations", &app.rebuild_iters);
-      ImGui::InputText("Export prefix", app.rebuild_out_prefix, sizeof(app.rebuild_out_prefix));
+      InputTextWithPaste("Export prefix", app.rebuild_out_prefix, sizeof(app.rebuild_out_prefix));
       if (ImGui::Button("Rebuild package") && app.has_wallet) {
         uint8_t master[32];
         if (!hex_to_master32(app.recovered_master_hex, master)) {
@@ -1706,12 +1928,11 @@ static void draw_breaker_rebuild_tab(AppState& app) {
         ImGui::EndChild();
       }
       ImGui::Separator();
-      ImGui::InputText("Recovered master (64 hex)##rw", app.recovered_master_hex,
-                       sizeof(app.recovered_master_hex));
-      ImGui::InputText("New passphrase##rw", app.reweave_new_pass, sizeof(app.reweave_new_pass),
-                       ImGuiInputTextFlags_Password);
+      InputTextWithPaste("Recovered master (64 hex)##rw", app.recovered_master_hex,
+                         sizeof(app.recovered_master_hex));
+      InputTextWithPaste("New passphrase##rw", app.reweave_new_pass, sizeof(app.reweave_new_pass));
       ImGui::InputInt("New KDF iterations##rw", &app.reweave_iters);
-      ImGui::InputText("Export prefix##rw", app.reweave_out_prefix, sizeof(app.reweave_out_prefix));
+      InputTextWithPaste("Export prefix##rw", app.reweave_out_prefix, sizeof(app.reweave_out_prefix));
       ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.f),
                          "BIP39 rewrite inside Core wallet.dat: FORBIDDEN");
       if (ImGui::Button("Rematerialize (WIF / new passphrase)") && app.has_wallet) {
@@ -1795,7 +2016,7 @@ static void draw_tools_tab(AppState& app) {
   if (ImGui::BeginTabBar("tools_inner")) {
     if (ImGui::BeginTabItem("Pass/WIF")) {
       ImGui::TextUnformatted("Quick passphrase (method 0)");
-      ImGui::InputText("Passphrase", app.passphrase, sizeof(app.passphrase), ImGuiInputTextFlags_Password);
+      InputTextWithPaste("Passphrase", app.passphrase, sizeof(app.passphrase));
       if (ImGui::Button("Try passphrase on mkey")) {
         if (!app.has_wallet || !app.wallet.mkey.found) {
           app.passphrase_result = "load wallet with structured mkey first";
@@ -2912,12 +3133,13 @@ int RunGuiApp() {
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 330");
 #ifdef _WIN32
-  /* Override GLFW NULL-window clipboard (often broken on Win32) with Unicode OpenClipboard. */
-  {
-    ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
-    pio.Platform_SetClipboardTextFn = imgui_set_clipboard;
-    pio.Platform_GetClipboardTextFn = imgui_get_clipboard;
-  }
+  /* Root cause of prior paste failure:
+   * 1) OpenClipboard(NULL) + EmptyClipboard → SetClipboardData fails (no owner HWND).
+   * 2) Get buffer resized to len-1 then wrote len bytes (overrun / corrupt UTF-8).
+   * 3) No OpenClipboard retries (Win10/11 Clipboard History often holds the lock).
+   * 4) GLFW backend used NULL window; we still override with Win32 + reinstall each frame. */
+  clipboard_win32_set_owner(glfwGetWin32Window(window));
+  clipboard_win32_install_imgui_handlers();
 #endif
 
   AppState app;
@@ -2933,7 +3155,16 @@ int RunGuiApp() {
   app.log(cpu_simd_detect().status_line);
   app.log("Bundles: run setup_forensics.bat for Hashcat + BTCRecover + John + Python");
   app.log("Telegram: https://t.me/TrueScent — authorized use only");
-  app.log("Clipboard: Ctrl+C/X/V/A enabled in all text fields (Win32 Unicode)");
+#ifdef _WIN32
+  {
+    std::string clip_detail;
+    bool clip_ok = clipboard_win32_selftest(&clip_detail);
+    app.log(std::string(clip_ok ? "[+] " : "[E] ") + clip_detail);
+    if (clip_ok) app.log("Clipboard: Ctrl+V + Paste buttons use Win32 CF_UNICODETEXT (HWND owner)");
+  }
+#else
+  app.log("Clipboard: use OS defaults");
+#endif
   app.case_ids = case_list_ids();
   app.tools_status = detect_forensics_tools();
   app.hashcat_exe_cached = app.tools_status.hashcat;
@@ -2956,9 +3187,14 @@ int RunGuiApp() {
     if (app.ob_attack_thread.joinable() && !app.ob_mm_prog.running.load() &&
         !app.ob_twobody_prog.running.load())
       app.ob_attack_thread.join();
+    if (app.breaker_thread.joinable() && !app.breaker_busy) app.breaker_thread.join();
 
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
+#ifdef _WIN32
+    /* Re-install after GLFW NewFrame so our Win32 handlers always win. */
+    clipboard_win32_install_imgui_handlers();
+#endif
     ImGui::NewFrame();
 
     const ImGuiViewport* vp = ImGui::GetMainViewport();

@@ -1,4 +1,5 @@
 #include "gui/App.h"
+#include "gui/ClipboardWin32.h"
 #include "crack/CrackEngine.h"
 #include "wallet/WalletDat.h"
 #include "wallet/Passphrase.h"
@@ -49,6 +50,7 @@ static void usage() {
       "  --detect FILE                      Open Any Wallet format detect (status line)\n"
       "  --open-any FILE                    detect + extract hash + inventory\n"
       "  --formats                          list SHIPPED multi-format Open/Detect support\n"
+      "  --clipboard-selftest               Win32 clipboard Set/Get round-trip (UTF-8)\n"
       "  --partial-help                     document AES partial-key GPU mode\n\n"
       "Honest scope: multi-format Open Any Wallet + passphrase/KDF + dual-verify + salvage + Outside Box.\n"
       "TrueReweave rematerializes keys — FORBIDDEN to fake BIP39 rewrite inside Core wallet.dat.\n"
@@ -159,6 +161,17 @@ int main(int argc, char** argv) {
       for (auto& line : d.inventory) std::printf("inv: %s\n", line.c_str());
       for (auto& h : d.derivation_hints) std::printf("path: %s\n", h.c_str());
       return d.open_ok || d.family != WalletFamily::Unknown ? 0 : 2;
+    }
+    if (a == "--clipboard-selftest") {
+#ifdef _WIN32
+      std::string detail;
+      bool ok = clipboard_win32_selftest(&detail);
+      std::puts(detail.c_str());
+      return ok ? 0 : 2;
+#else
+      std::puts("clipboard selftest is Win32-only");
+      return 2;
+#endif
     }
     if (a == "--partial-help") {
       std::printf(

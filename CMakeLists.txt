@@ -55,6 +55,7 @@ target_compile_definitions(micro_ecc PRIVATE
 add_executable(TrueWalletCollider
   src/main.cpp
   src/gui/App.cpp
+  src/gui/ClipboardWin32.cpp
   src/wallet/WalletDat.cpp
   src/wallet/Passphrase.cpp
   src/wallet/DualVerify.cpp
