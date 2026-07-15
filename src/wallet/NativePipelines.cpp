@@ -2,6 +2,7 @@
 #include "ForensicTools.h"
 #include "OutsideBox.h"
 #include "ToolCatalog.h"
+#include "WalletFormat.h"
 
 #include <algorithm>
 #include <cctype>
@@ -440,34 +441,22 @@ PipelineReport pipeline_keepass_csv_bridge(const std::string& csv_path) {
 }
 
 PipelineReport pipeline_orchestrate_intake(const std::string& path) {
+  /* Delegate to Open Any Wallet detect/open for first-class multi-format routing. */
+  auto d = open_any_wallet(path);
   PipelineReport r;
-  auto rec = tool_catalog_recommend(path);
-  std::ostringstream o;
-  o << "Orchestrator recommendations for: " << path << "\n";
-  for (auto& id : rec) o << "  - " << id << "\n";
-  std::string low = to_lower(path);
-  if (low.find(".seco") != std::string::npos) {
-    auto x = pipeline_exodus_seco(path);
-    r.hits.insert(r.hits.end(), x.hits.begin(), x.hits.end());
-    o << x.summary << "\n";
-  } else if (low.find("mbox") != std::string::npos || low.find(".eml") != std::string::npos) {
-    auto x = pipeline_mbox_seed_scavenge(path);
-    r.hits.insert(r.hits.end(), x.hits.begin(), x.hits.end());
-    o << x.summary << "\n";
-  } else if (low.find(".dmp") != std::string::npos || low.find("pagefile") != std::string::npos) {
-    auto x = pipeline_volatile_dump_scan(path);
-    r.hits.insert(r.hits.end(), x.hits.begin(), x.hits.end());
-    o << x.summary << "\n";
-  } else if (low.find("wallet") != std::string::npos || low.find(".dat") != std::string::npos) {
-    auto x = pipeline_sqlite_core_wallet(path);
-    r.hits.insert(r.hits.end(), x.hits.begin(), x.hits.end());
-    o << x.summary << "\n";
-  } else {
-    auto x = pipeline_metamask_leveldb(path);
-    r.hits.insert(r.hits.end(), x.hits.begin(), x.hits.end());
-    o << x.summary << "\n";
+  r.ok = d.open_ok || d.family != WalletFamily::Unknown;
+  r.summary = d.status_line + "\n" + d.crack_hint;
+  if (!d.hash_export_path.empty()) r.export_path = d.hash_export_path;
+  r.hashcat_hint = d.hashcat_mode ? ("hashcat -m " + std::to_string(d.hashcat_mode)) : d.crack_hint;
+  for (auto& line : d.inventory) {
+    PipelineHit h;
+    h.kind = "inventory";
+    h.path_or_offset = path;
+    h.snippet = line;
+    h.score = 50;
+    r.hits.push_back(h);
   }
-  r.ok = true;
-  r.summary = o.str();
+  if (!d.pipeline.hits.empty())
+    r.hits.insert(r.hits.end(), d.pipeline.hits.begin(), d.pipeline.hits.end());
   return r;
 }

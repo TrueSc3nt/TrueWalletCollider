@@ -218,20 +218,55 @@ WalletParseResult WalletDatParser::parse_bytes(const uint8_t* data, size_t len,
   r.file_size = len;
   r.log.push_back("[+] parsing " + path_label + " (" + std::to_string(len) + " bytes)");
 
+  /* Storage auto-detect: SQLite (Core ≥0.21) vs classic BDB */
+  if (len >= 15 && std::memcmp(data, "SQLite format 3", 15) == 0) {
+    r.is_sqlite = true;
+    r.storage_kind = "SQLite";
+    r.magic_ok = true;
+    r.magic_hex = to_hex(data, 15);
+    r.bdb_note = "Bitcoin Core / Core-fork SQLite wallet (format 3) — mkey/ckey still carved; "
+                 "$bitcoin$ Hashcat 11300 applies";
+    r.log.push_back("[+] " + r.bdb_note);
+  }
+
+  /* Coin hint from path (BTC / BCH / LTC / DOGE / Core fork) */
+  {
+    std::string pl = path_label;
+    for (char& c : pl)
+      if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    if (pl.find("bitcoincash") != std::string::npos || pl.find("\\bch\\") != std::string::npos)
+      r.coin_label = "Bitcoin Cash";
+    else if (pl.find("litecoin") != std::string::npos)
+      r.coin_label = "Litecoin";
+    else if (pl.find("dogecoin") != std::string::npos)
+      r.coin_label = "Dogecoin";
+    else if (pl.find("bitcoin") != std::string::npos)
+      r.coin_label = "Bitcoin";
+    else
+      r.coin_label = "Core fork";
+  }
+
   /* Berkeley DB magic check at offset 12 (BitcoinWalletAnalyzer style) */
-  if (len >= 20) {
+  if (!r.is_sqlite && len >= 20) {
     static const uint8_t kMagic[8] = {0x62, 0x31, 0x05, 0x00, 0x09, 0x00, 0x00, 0x00};
     r.magic_hex = to_hex(data + 12, 8);
     r.magic_ok = (std::memcmp(data + 12, kMagic, 8) == 0);
     if (r.magic_ok) {
-      r.bdb_note = "Bitcoin Core BDB magic OK (offset 12)";
+      r.is_bdb = true;
+      r.storage_kind = "BDB";
+      r.bdb_note = r.coin_label + " Core BDB magic OK (offset 12) — Hashcat 11300 / $bitcoin$";
       r.log.push_back("[+] " + r.bdb_note);
     } else {
-      r.bdb_note = "magic mismatch — may still contain keys (raw dump / truncated)";
+      r.storage_kind = "raw/unknown";
+      r.bdb_note = "magic mismatch — may still contain keys (raw dump / truncated / Core fork)";
       r.warnings.push_back("file is not a standard Bitcoin Core wallet magic: " + r.magic_hex);
       r.log.push_back("[!] " + r.bdb_note + " magic=" + r.magic_hex);
     }
+  } else if (!r.is_sqlite) {
+    r.storage_kind = "raw/unknown";
   }
+  if (!r.coin_label.empty())
+    r.log.push_back("[+] coin_label=" + r.coin_label + " storage=" + r.storage_kind);
 
   /* Primary: BitcoinWalletAnalyzer read_wallet — 48 bytes preceding ASCII "mkey" */
   {
@@ -373,6 +408,7 @@ std::string WalletDatParser::export_txt(const WalletParseResult& r) {
   o << "path: " << r.path << "\n";
   o << "size: " << r.file_size << "\n";
   o << "magic_ok: " << (r.magic_ok ? "yes" : "no") << " magic=" << r.magic_hex << "\n";
+  o << "storage: " << r.storage_kind << " coin: " << r.coin_label << "\n";
   o << "bdb: " << r.bdb_note << "\n\n";
   if (r.mkey.found) {
     o << "=== MASTER KEY ===\n";

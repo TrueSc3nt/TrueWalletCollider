@@ -49,6 +49,10 @@ struct WalletParseResult {
   bool magic_ok = false;
   std::string magic_hex;
   std::string bdb_note;
+  bool is_sqlite = false;       /* Core ≥0.21 SQLite wallet */
+  bool is_bdb = false;          /* classic Berkeley DB */
+  std::string storage_kind;     /* "BDB" | "SQLite" | "raw/unknown" */
+  std::string coin_label;       /* Bitcoin / BCH / LTC / DOGE / Core fork */
   MasterKeyInfo mkey;
   std::vector<CKeyInfo> ckeys;
   std::vector<MetaHit> meta;

@@ -10,6 +10,8 @@
 #include "wallet/OutsideBox.h"
 #include "wallet/ToolCatalog.h"
 #include "wallet/NativePipelines.h"
+#include "wallet/WalletFormat.h"
+#include "wallet/TrueReweave.h"
 #include "crypto/crypto_wallet.h"
 #include "crypto/secp256k1_lite.h"
 
@@ -43,9 +45,13 @@ static void usage() {
       "  --experiment NAME                  research harness (help|dual_fp|passphrase|secp|hashcat_fmt)\n"
       "  --tools-status                     full DFIR catalog + bundle detectors\n"
       "  --catalog-count                    print Universal Tool Bay entry count\n"
-      "  --pipeline NAME PATH               native intake (metamask|exodus|mbox|ocr|dump|ext|sqlite|orch)\n"
+      "  --pipeline NAME PATH               native intake (metamask|exodus|mbox|ocr|dump|ext|sqlite|orch|electrum)\n"
+      "  --detect FILE                      Open Any Wallet format detect (status line)\n"
+      "  --open-any FILE                    detect + extract hash + inventory\n"
+      "  --formats                          list SHIPPED multi-format Open/Detect support\n"
       "  --partial-help                     document AES partial-key GPU mode\n\n"
-      "Honest scope: passphrase/KDF + dual-verify + salvage + Outside Box archaeology.\n"
+      "Honest scope: multi-format Open Any Wallet + passphrase/KDF + dual-verify + salvage + Outside Box.\n"
+      "TrueReweave rematerializes keys — FORBIDDEN to fake BIP39 rewrite inside Core wallet.dat.\n"
       "Raw full AES-256 search of unknown keys is research/partial-key only (2^256).\n"
       "Commercial tools = Integration Hub bridges only (never pirate).\n"
       "Optional bundles: run setup_forensics.bat → third_party\\...\n");
@@ -131,6 +137,29 @@ int main(int argc, char** argv) {
              : r.base.verdict == VerifyVerdict::CORRUPT ? 2
                                                        : 3;
     }
+    if (a == "--formats") {
+      std::fputs(supported_formats_shipped().c_str(), stdout);
+      return 0;
+    }
+    if (a == "--detect" && argc >= 3) {
+      auto d = detect_wallet_file(argv[2]);
+      std::puts(d.status_line.c_str());
+      std::printf("family=%s coin=%s mode=%d\n", wallet_family_cstr(d.family),
+                  coin_hint_cstr(d.coin), d.hashcat_mode);
+      return d.family == WalletFamily::Unknown ? 2 : 0;
+    }
+    if (a == "--open-any" && argc >= 3) {
+      auto d = open_any_wallet(argv[2]);
+      std::puts(d.status_line.c_str());
+      std::printf("label=%s coin=%s open_ok=%d mode=%d\n", d.label.c_str(), d.coin_display.c_str(),
+                  (int)d.open_ok, d.hashcat_mode);
+      if (!d.hash_line.empty()) std::printf("hash=%s\n", d.hash_line.c_str());
+      if (!d.hash_export_path.empty()) std::printf("export=%s\n", d.hash_export_path.c_str());
+      std::puts(d.crack_hint.c_str());
+      for (auto& line : d.inventory) std::printf("inv: %s\n", line.c_str());
+      for (auto& h : d.derivation_hints) std::printf("path: %s\n", h.c_str());
+      return d.open_ok || d.family != WalletFamily::Unknown ? 0 : 2;
+    }
     if (a == "--partial-help") {
       std::printf(
           "AES Partial-Key / Keyhole mode (where GPU AES earns its keep)\n"
@@ -181,10 +210,12 @@ int main(int argc, char** argv) {
         rep = pipeline_browser_extension_walker(path);
       else if (name == "sqlite")
         rep = pipeline_sqlite_core_wallet(path);
+      else if (name == "electrum")
+        rep = pipeline_electrum_helper(path);
       else if (name == "orch")
         rep = pipeline_orchestrate_intake(path);
       else {
-        std::fprintf(stderr, "unknown pipeline\n");
+        std::fprintf(stderr, "unknown pipeline (metamask|exodus|electrum|mbox|ocr|dump|ext|sqlite|orch)\n");
         return 2;
       }
       std::puts(rep.summary.c_str());

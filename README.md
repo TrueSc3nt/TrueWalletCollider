@@ -2,11 +2,32 @@
 
 # TrueWalletCollider — Forensic Suite / Recovery Lab
 
-Portable Windows **x64** toolkit for **authorized** Bitcoin Core `wallet.dat` recovery, DFIR triage, and cryptanalysis R&D.
+Portable Windows **x64** toolkit for **authorized** multi-format wallet recovery, DFIR triage, and cryptanalysis R&D.
 
-Dear ImGui + GLFW + OpenGL GUI with embedded **CUDA AES** search (TrueMkeyCollider core), native passphrase / KDF with **runtime CPU SIMD detection** (SSE2 / AVX / AVX2 / AVX-512), salvage, dual-verify, **Breaker & Rebuild Lab**, **Outside Box** maximalist archaeology, **Universal Tool Bay** (full DFIR research catalog — nothing left docs-only), Verify / Case evidence tabs, and bundled third-party bridges after `setup_forensics.bat`.
+Dear ImGui + GLFW + OpenGL GUI with embedded **CUDA AES** search (TrueMkeyCollider core), native passphrase / KDF with **runtime CPU SIMD detection** (SSE2 / AVX / AVX2 / AVX-512), salvage, dual-verify, **Breaker & Rebuild Lab**, **TrueReweave**, **Outside Box** maximalist archaeology, **Universal Tool Bay**, Verify / Case evidence tabs, and bundled third-party bridges after `setup_forensics.bat`.
 
-The suite is **expandable** toward multi-coin wallet extraction (MetaMask / Exodus / Electrum and related DFIR lanes via Tool Bay pipelines). Broader coin coverage is intentional roadmap — this repo ships Bitcoin Core + bridge points; research catalogs the rest.
+## Supported formats (SHIPPED)
+
+**Open Any Wallet** / drag-drop auto-detects and routes to inventory + hash extract + crack bridges:
+
+| Format | Detect label | Hashcat / bridge |
+|--------|--------------|------------------|
+| Bitcoin Core `wallet.dat` (BDB + SQLite) | Detected: Bitcoin Core BDB/SQLite | `-m 11300` `$bitcoin$` |
+| Bitcoin Cash / Litecoin / Dogecoin / Core forks | Detected: … Core BDB/SQLite | same 11300 (shared wallet crypto) |
+| Ethereum UTC keystore JSON | Detected: Ethereum Keystore | `-m 15600` / `15700` (/ `16300` pre-sale) |
+| Electrum family | Detected: Electrum | `-m 16600` / `21700` / `21800` |
+| Exodus `seed.seco` | Detected: Exodus seed.seco | `-m 28200` (exodus2hashcat) |
+| MetaMask LevelDB vault | Detected: MetaMask LevelDB | `-m 26600` / `26620` |
+| Phantom / Atomic LevelDB | Detected: Phantom / Atomic | intake + Tool Bay pipelines |
+| Blockchain.com JSON | Detected: Blockchain.com | intake + `-m 12700` bridge |
+| MultiBit | Detected: MultiBit | `-m 22500` bridge |
+| Wasabi JSON | Detected: Wasabi | intake |
+
+Derivation path hints (walletsrecovery.org style): **BTC BIP44/49/84/86**, **ETH `m/44'/60'/0'/0/0`**, **SOL `m/44'/501'/0'/0'`**.
+
+**TrueReweave** inventories every record and rematerializes under a **new passphrase** with WIF/JSON export. Explicitly **forbids** fake “replace BIP39 inside Core `wallet.dat`” (classic Core never stored BIP39).
+
+CLI: `--formats` · `--detect FILE` · `--open-any FILE`
 
 > **Authorized use only** — wallet owners, businesses recovering their own assets, and DFIR under clear legal authority.  
 > Unauthorized access to wallets or systems is illegal.  
@@ -23,19 +44,19 @@ The suite is **expandable** toward multi-coin wallet extraction (MetaMask / Exod
 
 | Tab | Capabilities |
 |-----|----------------|
-| **Extract** | Parse `wallet.dat`, archaeology flags, folder scan by iters, TXT/JSON/ckey exports, drag-drop |
+| **Extract** | **Open Any Wallet** multi-format detect; Core mkey/ckeys; ETH/Electrum/Exodus/MetaMask hash export; archaeology; drag-drop |
 | **Salvage** | Carve mkey/ckey from damaged dumps; heatmap + ranked candidates |
 | **Passphrase Lab** | Method-0 KDF, dict/mask/recall wizard, dual-verify batch, measured H/s |
 | **AES Partial** | CUDA prefix search (`MODE_PARTIAL`) + cold-boot hex candidates |
-| **Breaker & Rebuild** | Orchestrate verify / carve / native KDF / Hashcat / John / BTCRecover / CUDA-hint; carve mnemonics with honesty; rebuild = decrypt all keys + re-encrypt mkey under **your** new passphrase + WIF/JSON export |
+| **Breaker & Rebuild** | Orchestrate verify/carve/KDF/Hashcat/John/BTCRecover; **TrueReweave** inventory + rematerialize (no fake Core BIP39 rewrite) |
 | **Outside Box** | All 23 archaeology / memory-import / structural / lab-exotic modules (see below) |
 | **Verify** | REAL / SUSPECT / FAKE / CORRUPT checklist (wallet, `$bitcoin$`, pasted mkey/ckey) |
 | **Case** | `cases/<id>/` notes, artifact copies, PowerShell zip export |
 | **BTCRecover Lab** | tokenlist / passwordlist / BIP39 / Electrum / typos / seedrecover + stream |
-| **Hashcat Bridge** | `$bitcoin$` `-m 11300` export, spawn + **stream**, John `--format=bitcoin` |
+| **Hashcat Bridge** | Multi-mode export/spawn (`11300`, `15600`/`15700`, Electrum, MetaMask, Exodus `28200`) |
 | **Results** | Dual-verify status, `decrypt_all_ckeys`, FOUND_WALLET, secure-erase checklist |
 | **Tools** | Pass/WIF, BIP39, brainwallet, Base58/Bech32, hex+entropy, wallet.dat diff, strings, balance HTTP, triage |
-| **Tool Bay** | Searchable Universal Tool Bay (100+ DFIR entries) · native Pipelines · Commercial Integration Hub |
+| **Tool Bay** | Full DFIR catalog · Pipelines wired into Open/Detect · Commercial Integration Hub |
 
 ### Right-column GUI tabs
 
@@ -126,6 +147,7 @@ Confirm brand bar shows SIMD status, then:
 ```bat
 TrueWalletCollider.exe --tools-status
 TrueWalletCollider.exe --catalog-count
+TrueWalletCollider.exe --formats
 TrueWalletCollider.exe --outside-box
 ```
 
@@ -139,9 +161,14 @@ Notices: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 ```bat
 TrueWalletCollider.exe                  # Forensic Suite GUI
 TrueWalletCollider.exe -h
+TrueWalletCollider.exe --formats
+TrueWalletCollider.exe --detect wallet.dat
+TrueWalletCollider.exe --open-any UTC--….json
+TrueWalletCollider.exe --open-any seed.seco
 TrueWalletCollider.exe --tools-status
 TrueWalletCollider.exe --catalog-count
 TrueWalletCollider.exe --pipeline metamask "C:\path\to\LevelDB"
+TrueWalletCollider.exe --pipeline electrum default_wallet
 TrueWalletCollider.exe --pipeline orch wallet.dat
 TrueWalletCollider.exe --outside-box
 TrueWalletCollider.exe --verify wallet.dat

@@ -34,17 +34,19 @@ Full inventory: [DFIR_CATALOG.md](DFIR_CATALOG.md).
 
 ## Core recovery path
 
-1. **Extract** — open / drop `wallet.dat`. Read archaeology flags (`MULTI_MKEY`, `LOW_ITER`, …).
-2. **Verify** — REAL / SUSPECT / FAKE / CORRUPT. Or Outside Box → Fake-wallet detector++.
+1. **Extract → Open Any Wallet** — drop / open any supported format. Status shows e.g. `Detected: Bitcoin Core SQLite`, `Detected: Ethereum Keystore`, `Detected: Electrum`.
+2. **Verify** — REAL / SUSPECT / FAKE / CORRUPT (Core / `$bitcoin$`).
 3. **Case** — create case folder; stash artifacts.
-4. Attack passphrase:
-   - **Passphrase Lab** (dict / mask / recall)
-   - **Outside Box** heir interview, fat-finger, CSV bridge, Two-Body, multi-mkey
-   - **Hashcat Bridge** / **John** / **BTCRecover Lab**
-   - **Breaker & Rebuild** orchestrator
-5. Partial AES / Keyhole → **AES Partial** or CUDA Crack.
+4. Attack passphrase / hash:
+   - Core: **Passphrase Lab**, Hashcat `-m 11300`, John, BTCRecover, Breaker
+   - ETH: Hashcat `15600`/`15700`; Electrum `16600`/`21700`/`21800`; Exodus `28200`; MetaMask `26600`/`26620`
+5. Partial AES / Keyhole → **AES Partial** or CUDA Crack (Core AES path).
 6. **Results** — dual-verify, decrypt all ckeys, secure erase.
-7. **Breaker → Rebuild** — re-encrypt mkey under your new passphrase; export WIF/JSON.
+7. **Breaker → TrueReweave** — inventory every record; rematerialize with **new passphrase** + WIF/JSON. **Forbidden:** fake BIP39 rewrite inside Core `wallet.dat`.
+
+### Derivation hints (rematerialize)
+
+BTC `m/44'/0'/0'/0/0` (BIP44), `m/49'/0'/0'/0/0` (BIP49), `m/84'/0'/0'/0/0` (BIP84), `m/86'/0'/0'/0/0` (BIP86); ETH `m/44'/60'/0'/0/0`; SOL `m/44'/501'/0'/0'`.
 
 ---
 

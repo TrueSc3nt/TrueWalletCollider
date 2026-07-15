@@ -19,6 +19,9 @@
 #include "../wallet/OutsideBox.h"
 #include "../wallet/ToolCatalog.h"
 #include "../wallet/NativePipelines.h"
+#include "../wallet/WalletFormat.h"
+#include "../wallet/TrueReweave.h"
+#include "../wallet/DerivationPaths.h"
 
 #define GLAD_GL_IMPLEMENTATION
 #include <glad/gl.h>
@@ -188,6 +191,20 @@ struct AppState {
   char orch_dict[512] = {};
   char orch_tokenlist[512] = {};
   bool about_open = false;
+
+  /* Open Any Wallet / multi-format */
+  DetectedWallet detected;
+  bool has_detected = false;
+  char user_coin_tag[64] = {};
+
+  /* TrueReweave */
+  TrueReweaveInventory reweave_inv;
+  bool has_reweave_inv = false;
+  TrueReweaveResult reweave_result;
+  bool has_reweave = false;
+  char reweave_new_pass[256] = {};
+  char reweave_out_prefix[260] = "truereweave_export";
+  int reweave_iters = 50000;
 
   /* Results */
   DualVerifyResult last_dual;
@@ -387,25 +404,47 @@ static bool hex_to_master32(const char* hex, uint8_t out[32]) {
 
 static void load_wallet_path(AppState& app, const std::string& path) {
   if (path.empty()) return;
-  WalletDatParser parser;
-  app.wallet = parser.parse_file(path);
-  app.has_wallet = true;
-  app.wallet_raw = read_file_bytes(path);
-  app.archaeology = analyze_archaeology(app.wallet, app.wallet_raw.data(), app.wallet_raw.size());
-  app.selected_ckey = app.wallet.ckeys.empty() ? -1 : 0;
-  for (auto& line : app.wallet.log) app.log(line);
-  for (auto& w : app.wallet.warnings) app.log("[warn] " + w);
-  for (auto& f : app.archaeology.findings)
-    app.log("[arch] " + f.flag + ": " + f.detail);
-  app.log("[+] ready — " + std::to_string(app.wallet.ckeys.size()) + " ckeys");
-  if (app.target_address[0]) {
-    for (size_t i = 0; i < app.wallet.ckeys.size(); ++i) {
-      if (app.wallet.ckeys[i].address == app.target_address) {
-        app.log("*** TARGET MATCH ckey #" + std::to_string(i) + " ***");
-        app.selected_ckey = (int)i;
+  app.detected = open_any_wallet(path);
+  app.has_detected = true;
+  for (auto& line : app.detected.log) app.log(line);
+  for (auto& w : app.detected.warnings) app.log("[warn] " + w);
+  app.log(app.detected.status_line);
+
+  if (app.detected.is_core_family) {
+    app.wallet = app.detected.core;
+    app.has_wallet = true;
+    app.wallet_raw = read_file_bytes(path);
+    if (!app.detected.coin_display.empty())
+      app.wallet.coin_label = app.detected.coin_display;
+    if (app.user_coin_tag[0]) app.wallet.coin_label = app.user_coin_tag;
+    app.archaeology = analyze_archaeology(app.wallet, app.wallet_raw.data(), app.wallet_raw.size());
+    app.selected_ckey = app.wallet.ckeys.empty() ? -1 : 0;
+    for (auto& f : app.archaeology.findings)
+      app.log("[arch] " + f.flag + ": " + f.detail);
+    app.log("[+] Core-family ready — " + std::to_string(app.wallet.ckeys.size()) + " ckeys | " +
+            app.wallet.coin_label + " | " + app.wallet.storage_kind);
+    if (app.target_address[0]) {
+      for (size_t i = 0; i < app.wallet.ckeys.size(); ++i) {
+        if (app.wallet.ckeys[i].address == app.target_address) {
+          app.log("*** TARGET MATCH ckey #" + std::to_string(i) + " ***");
+          app.selected_ckey = (int)i;
+        }
       }
     }
+  } else {
+    /* Non-Core: keep inventory in detected; optional empty Core parse clear */
+    app.has_wallet = false;
+    app.wallet = WalletParseResult{};
+    app.wallet.path = path;
+    app.wallet_raw = read_file_bytes(path);
+    app.log("[+] Non-Core wallet routed — hash/crack path: " + app.detected.crack_hint);
+    if (!app.detected.hash_export_path.empty())
+      app.log("[+] hash export: " + app.detected.hash_export_path +
+              (app.detected.hashcat_mode ? (" (-m " + std::to_string(app.detected.hashcat_mode) + ")")
+                                         : ""));
   }
+  app.reweave_inv = truereweave_inventory(app.wallet, &app.detected);
+  app.has_reweave_inv = true;
 }
 
 #ifdef _WIN32
@@ -666,16 +705,28 @@ static void draw_meta_panel(AppState& app) {
 }
 
 static void draw_extract_tab(AppState& app) {
-  if (!app.has_wallet) {
-    ImGui::TextWrapped(
-        "Drop wallet.dat here or Open File. Extract tab folds overview, mkey, ckeys, metadata, "
-        "and archaeology flags.");
-    if (ImGui::Button("Open wallet.dat", ImVec2(180, 36))) {
-      auto p = open_file_dialog();
+  ImGui::TextColored(ImVec4(0.55f, 0.85f, 0.95f, 1.f), "Open Any Wallet — multi-format (SHIPPED)");
+  ImGui::TextWrapped(
+      "Drop any wallet file/folder here or Open. Auto-detects Core wallet.dat (BTC/BCH/LTC/DOGE + "
+      "forks, BDB+SQLite), Ethereum keystore, Electrum, Exodus .seco, MetaMask/Phantom LevelDB, "
+      "Blockchain.com / MultiBit / Wasabi.");
+  if (app.has_detected) {
+    ImGui::TextColored(ImVec4(0.45f, 0.95f, 0.55f, 1.f), "%s", app.detected.status_line.c_str());
+    ImGui::TextWrapped("Coin: %s | Mode hint: %s", app.detected.coin_display.c_str(),
+                       app.detected.crack_hint.c_str());
+  }
+
+  if (!app.has_wallet && !app.has_detected) {
+    if (ImGui::Button("Open Any Wallet", ImVec2(180, 36))) {
+      auto p = open_file_dialog(
+          "All wallets\0*.dat;*.json;*.seco;*.wallet;*.*\0Core DAT\0*.dat\0JSON\0*.json\0"
+          "Exodus SECO\0*.seco\0All\0*.*\0");
       if (!p.empty()) load_wallet_path(app, p);
     }
     ImGui::SameLine();
     if (ImGui::Button("Load PoC targets", ImVec2(160, 36))) load_poc_wallet(app);
+    ImGui::InputText("Optional coin tag (BCH/LTC/DOGE…)", app.user_coin_tag,
+                     sizeof(app.user_coin_tag));
     ImGui::Separator();
     ImGui::Checkbox("Folder scan mode", &app.folder_scan_mode);
     if (app.folder_scan_mode) {
@@ -688,7 +739,10 @@ static void draw_extract_tab(AppState& app) {
 #ifdef _WIN32
       if (ImGui::Button("Scan *.dat (low iter first)")) scan_folder_wallets(app);
 #endif
-      if (!app.scanned_wallets.empty() && ImGui::BeginTable("scan", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY, ImVec2(0, 140))) {
+      if (!app.scanned_wallets.empty() &&
+          ImGui::BeginTable("scan", 4,
+                            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
+                            ImVec2(0, 140))) {
         ImGui::TableSetupColumn("Path");
         ImGui::TableSetupColumn("Iters");
         ImGui::TableSetupColumn("CKeys");
@@ -716,12 +770,52 @@ static void draw_extract_tab(AppState& app) {
     return;
   }
 
+  /* Non-Core detected wallet panel */
+  if (app.has_detected && !app.detected.is_core_family) {
+    ImGui::Separator();
+    ImGui::Text("File: %s", app.detected.path.c_str());
+    ImGui::TextWrapped("%s", app.detected.label.c_str());
+    if (app.detected.hashcat_mode)
+      ImGui::Text("Hashcat mode: %d", app.detected.hashcat_mode);
+    if (!app.detected.hash_line.empty()) {
+      ImGui::TextWrapped("Hash: %s", app.detected.hash_line.substr(0, 120).c_str());
+      if (ImGui::Button("Copy hash line")) set_clipboard(app.detected.hash_line);
+    }
+    if (!app.detected.hash_export_path.empty())
+      ImGui::Text("Export: %s", app.detected.hash_export_path.c_str());
+    if (ImGui::Button("Spawn Hashcat for detected mode")) {
+      auto sp = spawn_hashcat_for_detected(app.detected, app.hashcat_wordlist);
+      app.log(sp.message);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Re-open Any Wallet")) {
+      auto p = open_file_dialog(
+          "All wallets\0*.dat;*.json;*.seco;*.wallet;*.*\0All\0*.*\0");
+      if (!p.empty()) load_wallet_path(app, p);
+    }
+    if (ImGui::CollapsingHeader("Derivation path hints", ImGuiTreeNodeFlags_DefaultOpen)) {
+      for (auto& h : app.detected.derivation_hints) ImGui::BulletText("%s", h.c_str());
+    }
+    if (ImGui::CollapsingHeader("Inventory", ImGuiTreeNodeFlags_DefaultOpen)) {
+      for (auto& line : app.detected.inventory) ImGui::TextWrapped("%s", line.c_str());
+    }
+    return;
+  }
+
   ImGui::Text("File: %s", app.wallet.path.c_str());
-  ImGui::Text("Size: %zu | Magic: %s", app.wallet.file_size, app.wallet.magic_ok ? "OK" : "BAD");
+  ImGui::Text("Size: %zu | Magic: %s | Storage: %s | Coin: %s", app.wallet.file_size,
+              app.wallet.magic_ok ? "OK" : "BAD", app.wallet.storage_kind.c_str(),
+              app.wallet.coin_label.c_str());
   ImGui::TextWrapped("%s", app.wallet.bdb_note.c_str());
   ImGui::InputText("Target address", app.target_address, sizeof(app.target_address));
-  if (ImGui::Button("Re-open")) {
-    auto p = open_file_dialog();
+  ImGui::InputText("Coin tag override", app.user_coin_tag, sizeof(app.user_coin_tag));
+  if (ImGui::Button("Apply coin tag") && app.user_coin_tag[0]) {
+    app.wallet.coin_label = app.user_coin_tag;
+    if (app.has_detected) app.detected.coin_display = app.user_coin_tag;
+  }
+  if (ImGui::Button("Re-open Any Wallet")) {
+    auto p = open_file_dialog(
+        "All wallets\0*.dat;*.json;*.seco;*.wallet;*.*\0Core DAT\0*.dat\0All\0*.*\0");
     if (!p.empty()) load_wallet_path(app, p);
   }
   ImGui::SameLine();
@@ -748,7 +842,19 @@ static void draw_extract_tab(AppState& app) {
     WalletDatParser::write_mkeys_file(app.wallet, "mkeys_export.txt");
     app.log("[+] wrote ckeys_export.txt / mkeys_export.txt");
   }
+  ImGui::SameLine();
+  if (ImGui::Button("Export $bitcoin$")) {
+    if (write_hashcat_file(app.wallet, app.hashcat_export_path, true))
+      app.log("[+] wrote " + std::string(app.hashcat_export_path));
+    else
+      app.log("[E] no mkey/salt for hashcat export");
+  }
 
+  if (ImGui::CollapsingHeader("Derivation path hints", ImGuiTreeNodeFlags_DefaultOpen)) {
+    auto hints = app.has_detected ? app.detected.derivation_hints
+                                  : derivation_hints_for_coin(app.wallet.coin_label);
+    for (auto& h : hints) ImGui::BulletText("%s", h.c_str());
+  }
   if (ImGui::CollapsingHeader("Archaeology flags", ImGuiTreeNodeFlags_DefaultOpen))
     draw_archaeology_flags(app);
   if (ImGui::CollapsingHeader("Master key", ImGuiTreeNodeFlags_DefaultOpen)) draw_mkey_panel(app);
@@ -1432,6 +1538,52 @@ static void draw_breaker_rebuild_tab(AppState& app) {
         if (ImGui::Button("Copy TXT")) set_clipboard(app.rebuild_pkg.txt_bundle);
         ImGui::BeginChild("reb", ImVec2(0, 0), true);
         ImGui::TextUnformatted(app.rebuild_pkg.txt_bundle.c_str());
+        ImGui::EndChild();
+      }
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("4 · TrueReweave")) {
+      ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.35f, 1.f), "TrueReweave");
+      ImGui::TextWrapped("%s", truereweave_panel_banner().c_str());
+      ImGui::Separator();
+      if (ImGui::Button("Inventory every record")) {
+        app.reweave_inv =
+            truereweave_inventory(app.wallet, app.has_detected ? &app.detected : nullptr);
+        app.has_reweave_inv = true;
+        app.log("[+] TrueReweave inventory: " + app.reweave_inv.summary);
+      }
+      if (app.has_reweave_inv) {
+        ImGui::TextWrapped("%s", app.reweave_inv.honesty.c_str());
+        ImGui::BeginChild("reweave_inv", ImVec2(0, 160), true);
+        for (auto& line : app.reweave_inv.records) ImGui::TextWrapped("%s", line.c_str());
+        ImGui::EndChild();
+      }
+      ImGui::Separator();
+      ImGui::InputText("Recovered master (64 hex)##rw", app.recovered_master_hex,
+                       sizeof(app.recovered_master_hex));
+      ImGui::InputText("New passphrase##rw", app.reweave_new_pass, sizeof(app.reweave_new_pass),
+                       ImGuiInputTextFlags_Password);
+      ImGui::InputInt("New KDF iterations##rw", &app.reweave_iters);
+      ImGui::InputText("Export prefix##rw", app.reweave_out_prefix, sizeof(app.reweave_out_prefix));
+      ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.35f, 1.f),
+                         "BIP39 rewrite inside Core wallet.dat: FORBIDDEN");
+      if (ImGui::Button("Rematerialize (WIF / new passphrase)") && app.has_wallet) {
+        uint8_t master[32];
+        if (!hex_to_master32(app.recovered_master_hex, master)) {
+          app.log("[E] invalid master hex");
+        } else {
+          app.reweave_result = truereweave_rematerialize(master, app.wallet, app.reweave_new_pass,
+                                                         (uint32_t)app.reweave_iters);
+          app.has_reweave = true;
+          if (breaker_write_package(app.reweave_result.package, app.reweave_out_prefix))
+            app.log("[+] TrueReweave wrote " + std::string(app.reweave_out_prefix) + ".{json,txt}");
+          app.log(app.reweave_result.message);
+        }
+      }
+      if (app.has_reweave) {
+        ImGui::TextWrapped("%s", app.reweave_result.message.c_str());
+        ImGui::BeginChild("reweave_out", ImVec2(0, 0), true);
+        ImGui::TextUnformatted(app.reweave_result.package.txt_bundle.c_str());
         ImGui::EndChild();
       }
       ImGui::EndTabItem();
@@ -2526,18 +2678,26 @@ static void draw_lab_docs_tab(AppState& app) {
   ImGui::TextWrapped("%s", experiment_help().c_str());
   ImGui::Separator();
   ImGui::TextUnformatted("Workflow");
-  ImGui::BulletText("Extract / Salvage / Passphrase Lab / AES Partial / dual-verify (core Recovery Lab).");
+  ImGui::BulletText("Open Any Wallet / Extract: auto-detect Core (BTC/BCH/LTC/DOGE), ETH, Electrum, Exodus, MetaMask…");
+  ImGui::BulletText("Salvage / Passphrase Lab / AES Partial / dual-verify (Core Recovery Lab).");
+  ImGui::BulletText("TrueReweave (Breaker tab 4): inventory + rematerialize — NO fake BIP39-in-Core rewrite.");
   ImGui::BulletText("Outside Box: VSS, ghosts, leftovers, memory import, multi-mkey, Two-Body, CSV, Keyhole, Time-Slice, …");
-  ImGui::BulletText("Tool Bay: full DFIR catalog (100+) + native pipelines + Commercial Integration Hub.");
+  ImGui::BulletText("Tool Bay: full DFIR catalog + native pipelines wired into Open/Detect.");
   ImGui::BulletText("Verify: REAL/SUSPECT/FAKE/CORRUPT checklist (CLI --verify / --verify-plus).");
   ImGui::BulletText("Case: notes + evidence zip under cases/.");
-  ImGui::BulletText("BTCRecover Lab + Hashcat Bridge: local third_party bundles after setup_forensics.bat.");
-  ImGui::BulletText("Tools: BIP39, brainwallet, Base58/Bech32, hex/entropy, diff, strings, balance, triage.");
+  ImGui::BulletText("BTCRecover Lab + Hashcat Bridge: multi-mode (11300/15600/…/28200) after setup_forensics.bat.");
+  ImGui::Separator();
+  ImGui::TextUnformatted("Supported formats (SHIPPED)");
+  ImGui::TextWrapped("%s", supported_formats_shipped().c_str());
+  ImGui::Separator();
+  ImGui::TextUnformatted("Derivation path hints");
+  ImGui::TextWrapped("%s", derivation_paths_markdown().c_str());
   ImGui::Separator();
   ImGui::TextUnformatted("Honesty");
   ImGui::BulletText("Commercial crackers are bridges — not embedded free.");
   ImGui::BulletText("Some GPU seed tools are experimental (clone/build).");
   ImGui::BulletText("On-chain labeling ≠ local passphrase/AES crack.");
+  ImGui::BulletText("FORBIDDEN: inject BIP39 into classic Core wallet.dat (never stored there).");
   ImGui::Separator();
   ImGui::TextUnformatted("Hibernation / RAM forensic guidance");
   ImGui::TextWrapped(
@@ -2582,16 +2742,10 @@ int RunGuiApp() {
     if (!app || count <= 0) return;
     for (int i = 0; i < count; ++i) {
       std::string p = paths[i];
-      if (p.size() >= 4) {
-        auto lower = p;
-        std::transform(lower.begin(), lower.end(), lower.begin(),
-                       [](unsigned char c) { return (char)std::tolower(c); });
-        if (lower.size() >= 4 && lower.substr(lower.size() - 4) == ".dat") {
-          load_wallet_path(*app, p);
-          app->drop_pulse = 1.0;
-          break;
-        }
-      }
+      if (p.empty()) continue;
+      load_wallet_path(*app, p);
+      app->drop_pulse = 1.0;
+      break;
     }
   });
 #endif
@@ -2648,10 +2802,11 @@ int RunGuiApp() {
     draw_brand_bar(app);
     draw_about_modal(app);
 
-    if (app.drop_pulse > 0) {
-      ImGui::TextColored(ImVec4(0.55f, 0.92f, 0.55f, (float)app.drop_pulse), "wallet dropped");
-      app.drop_pulse -= io.DeltaTime * 0.6;
-    }
+      ImGui::TextColored(app.drop_pulse > 0 ? ImVec4(0.55f, 0.92f, 0.55f, (float)app.drop_pulse)
+                                           : ImVec4(0.6f, 0.6f, 0.6f, 1.f),
+                         app.drop_pulse > 0 ? "wallet dropped — auto-detected"
+                                            : "drop any wallet format");
+      if (app.drop_pulse > 0) app.drop_pulse -= io.DeltaTime * 0.6;
 
     ImGui::Columns(2, "maincols", true);
     ImGui::SetColumnWidth(0, vp->WorkSize.x * 0.58f);
