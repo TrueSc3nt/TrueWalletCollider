@@ -279,6 +279,8 @@ struct AppState {
   std::vector<CommercialBridge> commercial_hub;
 
   bool wipe_found_on_erase = false;
+  bool quit_requested = false;
+  GLFWwindow* window = nullptr;
 
   std::vector<std::string> devices;
   std::vector<std::string> console;
@@ -297,6 +299,93 @@ struct AppState {
     if (console.size() > 2000) console.erase(console.begin(), console.begin() + 500);
   }
 };
+
+static void join_thread_timeout(std::thread& t, int timeout_ms) {
+  if (!t.joinable()) return;
+#ifdef _WIN32
+  HANDLE h = (HANDLE)t.native_handle();
+  if (WaitForSingleObject(h, (DWORD)(timeout_ms < 0 ? 0 : timeout_ms)) == WAIT_OBJECT_0)
+    t.join();
+  else
+    t.detach();
+#else
+  (void)timeout_ms;
+  t.join();
+#endif
+}
+
+static void request_app_quit(AppState& app) {
+  app.quit_requested = true;
+  if (app.window) glfwSetWindowShouldClose(app.window, GLFW_TRUE);
+}
+
+/** Stop crack engines, kill Hashcat/John/BTCRecover children, join workers with timeout. */
+static void shutdown_app_workers(AppState& app) {
+  app.cracker.request_stop();
+  app.pp_progress.stop = true;
+  app.ob_mm_prog.stop = true;
+  app.ob_twobody_prog.stop = true;
+  app.hashcat_stream.stop();
+  app.btc_stream.stop();
+  app.cracker.join_timeout(2000);
+  join_thread_timeout(app.pp_thread, 2000);
+  join_thread_timeout(app.ob_attack_thread, 2000);
+}
+
+#ifdef _WIN32
+static std::string g_imgui_clipboard;
+
+static void win32_set_clipboard_utf8(const char* text) {
+  if (!text) return;
+  if (!OpenClipboard(nullptr)) return;
+  EmptyClipboard();
+  int wlen = MultiByteToWideChar(CP_UTF8, 0, text, -1, nullptr, 0);
+  if (wlen <= 0) {
+    CloseClipboard();
+    return;
+  }
+  HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, (SIZE_T)wlen * sizeof(wchar_t));
+  if (h) {
+    wchar_t* dst = (wchar_t*)GlobalLock(h);
+    if (dst) {
+      MultiByteToWideChar(CP_UTF8, 0, text, -1, dst, wlen);
+      GlobalUnlock(h);
+      SetClipboardData(CF_UNICODETEXT, h);
+    } else {
+      GlobalFree(h);
+    }
+  }
+  CloseClipboard();
+}
+
+static const char* win32_get_clipboard_utf8() {
+  g_imgui_clipboard.clear();
+  if (!OpenClipboard(nullptr)) return "";
+  HANDLE h = GetClipboardData(CF_UNICODETEXT);
+  if (h) {
+    const wchar_t* w = (const wchar_t*)GlobalLock(h);
+    if (w) {
+      int len = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
+      if (len > 1) {
+        g_imgui_clipboard.resize((size_t)len - 1);
+        WideCharToMultiByte(CP_UTF8, 0, w, -1, g_imgui_clipboard.data(), len, nullptr, nullptr);
+      }
+      GlobalUnlock(h);
+    }
+  } else if ((h = GetClipboardData(CF_TEXT)) != nullptr) {
+    const char* a = (const char*)GlobalLock(h);
+    if (a) {
+      g_imgui_clipboard = a;
+      GlobalUnlock(h);
+    }
+  }
+  CloseClipboard();
+  return g_imgui_clipboard.c_str();
+}
+
+static void imgui_set_clipboard(ImGuiContext*, const char* text) { win32_set_clipboard_utf8(text); }
+static const char* imgui_get_clipboard(ImGuiContext*) { return win32_get_clipboard_utf8(); }
+#endif
 
 static void glfw_error(int code, const char* desc) {
   std::fprintf(stderr, "GLFW %d: %s\n", code, desc);
@@ -345,17 +434,7 @@ static std::string browse_folder_dialog() {
   return path;
 }
 
-static void set_clipboard(const std::string& s) {
-  if (!OpenClipboard(nullptr)) return;
-  EmptyClipboard();
-  HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, s.size() + 1);
-  if (h) {
-    memcpy(GlobalLock(h), s.c_str(), s.size() + 1);
-    GlobalUnlock(h);
-    SetClipboardData(CF_TEXT, h);
-  }
-  CloseClipboard();
-}
+static void set_clipboard(const std::string& s) { win32_set_clipboard_utf8(s.c_str()); }
 
 static bool secure_erase_file(const std::string& path) {
   std::fstream f(path, std::ios::in | std::ios::out | std::ios::binary);
@@ -550,6 +629,17 @@ static std::vector<CrackTarget> build_targets(AppState& app) {
 }
 
 static void draw_brand_bar(AppState& app) {
+  if (ImGui::BeginMainMenuBar()) {
+    if (ImGui::BeginMenu("File")) {
+      if (ImGui::MenuItem("Exit", "Alt+F4")) request_app_quit(app);
+      ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu("Edit")) {
+      ImGui::TextDisabled("Ctrl+C / Ctrl+X / Ctrl+V / Ctrl+A in text fields");
+      ImGui::EndMenu();
+    }
+    ImGui::EndMainMenuBar();
+  }
   ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.78f, 0.62f, 0.28f, 1.f));
   ImGui::TextUnformatted("TrueWalletCollider");
   ImGui::PopStyleColor();
@@ -558,7 +648,7 @@ static void draw_brand_bar(AppState& app) {
   ImGui::SameLine();
   ImGui::TextDisabled("  Made by TrueScent");
   const auto& cpu = cpu_simd_detect();
-  ImGui::SameLine(ImGui::GetWindowWidth() - 420);
+  ImGui::SameLine(ImGui::GetWindowWidth() - 520);
   ImGui::TextColored(ImVec4(0.45f, 0.75f, 0.9f, 1.f), "%s", cpu.status_line.c_str());
   ImGui::SameLine();
   if (ImGui::SmallButton(app.light_theme ? "Noir" : "Light")) {
@@ -567,6 +657,8 @@ static void draw_brand_bar(AppState& app) {
   }
   ImGui::SameLine();
   if (ImGui::SmallButton("About")) app.about_open = true;
+  ImGui::SameLine();
+  if (ImGui::SmallButton("Exit")) request_app_quit(app);
   ImGui::Separator();
   ImGui::TextColored(ImVec4(0.9f, 0.55f, 0.35f, 1.f),
                      "AUTHORIZED USE ONLY — owner recovery / DFIR under authority");
@@ -2772,6 +2864,10 @@ static void draw_lab_docs_tab(AppState& app) {
 }
 
 int RunGuiApp() {
+#ifdef _WIN32
+  /* Prevent Windows Restart Manager from auto-relaunching after a prior crash/abort. */
+  UnregisterApplicationRestart();
+#endif
   glfwSetErrorCallback(glfw_error);
   if (!glfwInit()) return 1;
 
@@ -2788,6 +2884,8 @@ int RunGuiApp() {
   glfwSwapInterval(1);
   if (!gladLoadGL(glfwGetProcAddress)) {
     std::fprintf(stderr, "Failed to load OpenGL via GLAD\n");
+    glfwDestroyWindow(window);
+    glfwTerminate();
     return 1;
   }
 
@@ -2813,14 +2911,29 @@ int RunGuiApp() {
   ApplyTrueScentTheme(false);
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 330");
+#ifdef _WIN32
+  /* Override GLFW NULL-window clipboard (often broken on Win32) with Unicode OpenClipboard. */
+  {
+    ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
+    pio.Platform_SetClipboardTextFn = imgui_set_clipboard;
+    pio.Platform_GetClipboardTextFn = imgui_get_clipboard;
+  }
+#endif
 
   AppState app;
+  app.window = window;
   glfwSetWindowUserPointer(window, &app);
+  glfwSetWindowCloseCallback(window, [](GLFWwindow* w) {
+    auto* a = reinterpret_cast<AppState*>(glfwGetWindowUserPointer(w));
+    if (a) a->quit_requested = true;
+    glfwSetWindowShouldClose(w, GLFW_TRUE);
+  });
   app.devices = CrackEngine::list_devices();
   app.log("TrueWalletCollider Forensic Suite ready — Made by TrueScent");
   app.log(cpu_simd_detect().status_line);
   app.log("Bundles: run setup_forensics.bat for Hashcat + BTCRecover + John + Python");
   app.log("Telegram: https://t.me/TrueScent — authorized use only");
+  app.log("Clipboard: Ctrl+C/X/V/A enabled in all text fields (Win32 Unicode)");
   app.case_ids = case_list_ids();
   app.tools_status = detect_forensics_tools();
   app.hashcat_exe_cached = app.tools_status.hashcat;
@@ -2836,8 +2949,9 @@ int RunGuiApp() {
   else
     app.log("[!] no CUDA devices visible");
 
-  while (!glfwWindowShouldClose(window)) {
+  while (!glfwWindowShouldClose(window) && !app.quit_requested) {
     glfwPollEvents();
+    if (app.quit_requested) break;
     if (app.pp_thread.joinable() && !app.pp_progress.running.load()) app.pp_thread.join();
     if (app.ob_attack_thread.joinable() && !app.ob_mm_prog.running.load() &&
         !app.ob_twobody_prog.running.load())
@@ -2951,13 +3065,17 @@ int RunGuiApp() {
     glfwSwapBuffers(window);
   }
 
-  app.cracker.stop();
-  if (app.pp_progress.running.load()) app.pp_progress.stop = true;
-  if (app.pp_thread.joinable()) app.pp_thread.join();
+  /* Clean exit: stop engines, kill child tools, join with timeout — never hang. */
+  shutdown_app_workers(app);
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplGlfw_Shutdown();
   ImGui::DestroyContext();
   glfwDestroyWindow(window);
+  app.window = nullptr;
   glfwTerminate();
+#ifdef _WIN32
+  /* Guarantee process stays dead (no CUDA teardown hang / joinable-thread abort restart). */
+  ExitProcess(0);
+#endif
   return 0;
 }

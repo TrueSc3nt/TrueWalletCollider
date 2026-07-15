@@ -68,6 +68,10 @@ class CrackEngine {
 
   bool start();
   void stop();
+  /** Signal stop without joining (safe during app teardown). */
+  void request_stop();
+  /** Join worker up to timeout_ms; detaches if still running to avoid hang/abort. */
+  bool join_timeout(int timeout_ms = 2000);
   bool is_running() const { return status_.running.load(); }
 
   CrackStatus& status() { return status_; }

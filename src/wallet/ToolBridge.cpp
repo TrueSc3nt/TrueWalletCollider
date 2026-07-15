@@ -232,12 +232,17 @@ void ProcessStreamer::stop() {
   if (process_handle_) {
     TerminateProcess((HANDLE)process_handle_, 1);
   }
-#endif
-  if (reader_.joinable()) reader_.join();
-#ifdef _WIN32
+  /* Close pipe first so ReadFile unblocks; avoids hang on join. */
   if (pipe_rd_) {
     CloseHandle((HANDLE)pipe_rd_);
     pipe_rd_ = nullptr;
+  }
+  if (reader_.joinable()) {
+    HANDLE h = (HANDLE)reader_.native_handle();
+    if (WaitForSingleObject(h, 3000) == WAIT_OBJECT_0)
+      reader_.join();
+    else
+      reader_.detach();
   }
   if (thread_handle_) {
     CloseHandle((HANDLE)thread_handle_);
@@ -247,6 +252,8 @@ void ProcessStreamer::stop() {
     CloseHandle((HANDLE)process_handle_);
     process_handle_ = nullptr;
   }
+#else
+  if (reader_.joinable()) reader_.join();
 #endif
 }
 

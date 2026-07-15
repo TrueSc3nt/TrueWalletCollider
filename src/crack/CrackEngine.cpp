@@ -87,8 +87,8 @@ static void u256_sub_u64(uint64_t w[4], uint64_t sub) {
 CrackEngine::CrackEngine() = default;
 
 CrackEngine::~CrackEngine() {
-  stop();
-  if (thread_.joinable()) thread_.join();
+  request_stop();
+  join_timeout(2000);
 }
 
 void CrackEngine::set_targets(std::vector<CrackTarget> targets) {
@@ -186,9 +186,34 @@ bool CrackEngine::start() {
   return true;
 }
 
+void CrackEngine::request_stop() { status_.stop_requested = true; }
+
 void CrackEngine::stop() {
-  status_.stop_requested = true;
-  if (thread_.joinable()) thread_.join();
+  request_stop();
+  join_timeout(15000);
+}
+
+bool CrackEngine::join_timeout(int timeout_ms) {
+  if (!thread_.joinable()) return true;
+  if (timeout_ms <= 0) {
+    thread_.detach();
+    return false;
+  }
+#ifdef _WIN32
+  HANDLE h = (HANDLE)thread_.native_handle();
+  DWORD w = WaitForSingleObject(h, (DWORD)timeout_ms);
+  if (w == WAIT_OBJECT_0) {
+    thread_.join();
+    return true;
+  }
+  /* Still running — detach so ~thread does not std::terminate() and freeze exit. */
+  thread_.detach();
+  return false;
+#else
+  (void)timeout_ms;
+  thread_.join();
+  return true;
+#endif
 }
 
 void CrackEngine::worker() {
