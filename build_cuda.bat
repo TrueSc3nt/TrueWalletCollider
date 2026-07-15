@@ -4,6 +4,7 @@ cd /d "%~dp0"
 
 echo =============================================
 echo  TrueWalletCollider — automated CUDA+GUI build
+echo  Made by TrueScent — https://t.me/TrueScent
 echo =============================================
 
 REM ---- Visual Studio / Build Tools ----

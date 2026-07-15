@@ -9,6 +9,7 @@ echo  + pywallet, Volatility3, MetaMask/Exodus tools,
 echo  + seed/OCR clones, aLEAPP/iLEAPP, carvers, more
 echo  Made by TrueScent — authorized use only
 echo  https://t.me/TrueScent
+echo  Tip: double-click INSTALL.bat for setup + optional build
 echo =============================================
 echo.
 
@@ -391,4 +392,12 @@ echo Catalog:   TrueWalletCollider.exe --catalog-count / --tools-status
 echo GUI:       Tool Bay tab
 echo Commercial tools: install licensed copies separately ^(Integration Hub^)
 echo Telegram:  https://t.me/TrueScent
-exit /b 0
+if "!ERR!"=="0" (
+  echo.
+  echo [+] setup_forensics finished OK
+  exit /b 0
+)
+echo.
+echo [!] setup_forensics finished with some missing / failed items ^(see above^)
+echo     Re-run after installing git / 7-Zip / fixing network, or place tools manually.
+exit /b 1

@@ -1,10 +1,12 @@
-# TrueWalletCollider — Forensic Suite / Recovery Lab
-
 **Made by TrueScent** · Telegram: [https://t.me/TrueScent](https://t.me/TrueScent)
+
+# TrueWalletCollider — Forensic Suite / Recovery Lab
 
 Portable Windows **x64** toolkit for **authorized** Bitcoin Core `wallet.dat` recovery, DFIR triage, and cryptanalysis R&D.
 
 Dear ImGui + GLFW + OpenGL GUI with embedded **CUDA AES** search (TrueMkeyCollider core), native passphrase / KDF with **runtime CPU SIMD detection** (SSE2 / AVX / AVX2 / AVX-512), salvage, dual-verify, **Breaker & Rebuild Lab**, **Outside Box** maximalist archaeology, **Universal Tool Bay** (full DFIR research catalog — nothing left docs-only), Verify / Case evidence tabs, and bundled third-party bridges after `setup_forensics.bat`.
+
+The suite is **expandable** toward multi-coin wallet extraction (MetaMask / Exodus / Electrum and related DFIR lanes via Tool Bay pipelines). Broader coin coverage is intentional roadmap — this repo ships Bitcoin Core + bridge points; research catalogs the rest.
 
 > **Authorized use only** — wallet owners, businesses recovering their own assets, and DFIR under clear legal authority.  
 > Unauthorized access to wallets or systems is illegal.  
@@ -98,11 +100,24 @@ Dear ImGui + GLFW + OpenGL GUI with embedded **CUDA AES** search (TrueMkeyCollid
 
 ---
 
-## Quick start
+## Quick start (one-click)
+
+**Double-click [`INSTALL.bat`](INSTALL.bat)** (alias: [`INSTALL_EVERYTHING.bat`](INSTALL_EVERYTHING.bat)):
+
+1. Runs `setup_forensics.bat` — fetches Hashcat, embed Python, BTCRecover, John, and research clones into `third_party/`
+2. Asks **Y/N** — “Build TrueWalletCollider.exe now?” → runs `build_cuda.bat` if you say yes (needs VS C++ tools + CUDA Toolkit + CMake)
+3. Prints how to launch
 
 ```bat
-cd %USERPROFILE%\Desktop\TrueWalletCollider
+INSTALL.bat
+TrueWalletCollider.exe
+```
+
+Manual / incremental:
+
+```bat
 setup_forensics.bat
+build_cuda.bat
 TrueWalletCollider.exe
 ```
 
@@ -156,7 +171,9 @@ Requires Visual Studio C++ tools, CUDA Toolkit 12.x/13.x, and CMake:
 
 ```bat
 build_cuda.bat
-rem or incremental:
+rem or via alias:
+build.bat
+rem incremental (if build\ already configured):
 rebuild_quick.bat
 ```
 
@@ -175,3 +192,11 @@ Parse, salvage, Passphrase Lab, Outside Box (CPU paths), Verify, Case, Hashcat e
 | Dual-verify | Prefer `pubkey_match` over PKCS-only before moving funds |
 | Commercial / on-chain | Bridges + licensed installs only; labeling ≠ local crack |
 | GPU seed tools | Often experimental (clone/build); need address/xpub |
+
+---
+
+## License
+
+TrueWalletCollider original code is released under the **[MIT License](LICENSE)**.
+
+Optional tools fetched by `setup_forensics.bat` (BTCRecover, John the Ripper, Python, Hashcat, clones, etc.) remain under **their own licenses** and are not part of the MIT grant for this repo’s source — see **[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)**.

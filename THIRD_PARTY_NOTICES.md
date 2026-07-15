@@ -1,6 +1,8 @@
 # Third-party notices — TrueWalletCollider
 
-This product includes or optionally downloads third-party software. Licenses below are summaries; see each project for full text.
+**TrueWalletCollider original source code** is **[MIT](LICENSE)** (Made by TrueScent).
+
+This product includes or optionally downloads third-party software. Licenses below are summaries; see each project for full text. Optional DFIR tools fetched by `setup_forensics.bat` / `INSTALL.bat` keep their own licenses (including GPL for BTCRecover / John) — they are **not** re-licensed as MIT.
 
 **Made by TrueScent** — TrueWalletCollider does not claim ownership of Hashcat, John, BTCRecover, or Python. Bridges export hash lines and may spawn local processes for **authorized recovery only**.
 
