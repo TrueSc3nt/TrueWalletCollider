@@ -17,6 +17,8 @@
 #include "../wallet/CpuSimd.h"
 #include "../wallet/BreakerRebuild.h"
 #include "../wallet/OutsideBox.h"
+#include "../wallet/ToolCatalog.h"
+#include "../wallet/NativePipelines.h"
 
 #define GLAD_GL_IMPLEMENTATION
 #include <glad/gl.h>
@@ -243,6 +245,20 @@ struct AppState {
   std::thread ob_attack_thread;
   std::vector<std::string> ob_mutants;
   UnlockSessionChecklist ob_unlock = unlock_session_kit_guidance();
+
+  /* Universal Tool Bay / Catalog */
+  std::vector<CatalogEntryRuntime> catalog_rows;
+  CatalogStats catalog_stats;
+  char catalog_search[128] = {};
+  int catalog_cat_filter = 0; /* 0=all, then enum+1 */
+  bool catalog_only_runnable = false;
+  int catalog_selected = -1;
+  char catalog_intake_path[512] = {};
+  char catalog_pipe_out[512] = {};
+  std::string catalog_detail;
+  std::string catalog_orch_out;
+  char commercial_path_edit[512] = {};
+  std::vector<CommercialBridge> commercial_hub;
 
   bool wipe_found_on_erase = false;
 
@@ -2320,6 +2336,191 @@ static void draw_console(AppState& app) {
   ImGui::EndChild();
 }
 
+static void catalog_refresh(AppState& app) {
+  app.catalog_rows = tool_catalog_refresh();
+  app.catalog_stats = tool_catalog_stats(app.catalog_rows);
+  app.commercial_hub = commercial_integration_hub();
+}
+
+static void draw_tool_bay_tab(AppState& app) {
+  ImGui::TextColored(ImVec4(0.78f, 0.62f, 0.28f, 1.f), "Universal Tool Bay — DFIR Catalog");
+  ImGui::TextWrapped(
+      "Every tool from the Huge DFIR research dump has a GUI entry. Native = runnable here. "
+      "Setup = setup_forensics.bat. Commercial = licensed bridge only (never pirate). "
+      "On-chain labeling ≠ crack. Made by TrueScent — https://t.me/TrueScent");
+  if (ImGui::Button("Refresh status")) {
+    catalog_refresh(app);
+    app.tools_status = detect_forensics_tools();
+  }
+  ImGui::SameLine();
+  ImGui::Text("Entries: %d | Native: %d | Setup OK/miss: %d/%d | Ideas: %d", app.catalog_stats.total,
+              app.catalog_stats.native_runnable, app.catalog_stats.setup_installed,
+              app.catalog_stats.setup_missing, app.catalog_stats.idea);
+
+  if (ImGui::BeginTabBar("toolbay_inner")) {
+    if (ImGui::BeginTabItem("Catalog")) {
+      ImGui::InputText("Search", app.catalog_search, sizeof(app.catalog_search));
+      ImGui::Checkbox("Only runnable/installed", &app.catalog_only_runnable);
+      const char* cats[] = {"All",
+                            "Crackers",
+                            "Carvers",
+                            "Seed GPU",
+                            "Browser",
+                            "Mobile",
+                            "Memory",
+                            "Disk/VSS",
+                            "OCR/Email",
+                            "Password",
+                            "Commercial LE",
+                            "On-chain labeling",
+                            "Native / First-party",
+                            "Research / Quickfire",
+                            "Imaging / Acquisition"};
+      ImGui::Combo("Category", &app.catalog_cat_filter, cats, IM_ARRAYSIZE(cats));
+      ToolCategory cat_val = ToolCategory::Crackers;
+      ToolCategory* cat_ptr = nullptr;
+      if (app.catalog_cat_filter > 0) {
+        cat_val = static_cast<ToolCategory>(app.catalog_cat_filter - 1);
+        cat_ptr = &cat_val;
+      }
+      auto filtered = tool_catalog_filter(app.catalog_rows, app.catalog_search, cat_ptr,
+                                          app.catalog_only_runnable);
+      ImGui::Text("Showing %d / %d", (int)filtered.size(), (int)app.catalog_rows.size());
+      ImGui::BeginChild("catlist", ImVec2(0, 280), true);
+      for (int i = 0; i < (int)filtered.size(); ++i) {
+        auto& e = filtered[i];
+        bool sel = (app.catalog_selected >= 0 && app.catalog_selected < (int)app.catalog_rows.size() &&
+                    app.catalog_rows[app.catalog_selected].id == e.id);
+        char label[256];
+        std::snprintf(label, sizeof(label), "[%s] %s — %s", tool_kind_name(e.kind), e.name.c_str(),
+                      e.status_label.c_str());
+        if (ImGui::Selectable(label, sel)) {
+          for (int j = 0; j < (int)app.catalog_rows.size(); ++j)
+            if (app.catalog_rows[j].id == e.id) {
+              app.catalog_selected = j;
+              break;
+            }
+          app.catalog_detail = e.description + "\n\nStatus: " + e.status_label +
+                               "\nCategory: " + std::string(tool_category_name(e.category)) +
+                               "\nDocs: " + e.docs_url + "\nPath: " + e.resolved_path +
+                               "\nNotes: " + e.notes;
+        }
+      }
+      ImGui::EndChild();
+      ImGui::BeginChild("catdetail", ImVec2(0, 120), true);
+      ImGui::TextWrapped("%s", app.catalog_detail.c_str());
+      ImGui::EndChild();
+      if (app.catalog_selected >= 0 && app.catalog_selected < (int)app.catalog_rows.size()) {
+        auto& e = app.catalog_rows[app.catalog_selected];
+        if (e.kind == ToolKind::Native && ImGui::Button("Open related native tab hint")) {
+          app.log("[Tool Bay] Native action: " + e.native_action + " — use matching GUI tab / Pipelines");
+        }
+        if ((e.kind == ToolKind::SetupFetch || e.kind == ToolKind::Experimental) &&
+            ImGui::Button("Setup hint")) {
+          app.log("[Tool Bay] Run setup_forensics.bat (section key: " +
+                  (e.setup_key.empty() ? e.id : e.setup_key) + ")");
+          app.log("Missing tools download into third_party/. GUI shows Installed/Missing.");
+        }
+        if ((e.kind == ToolKind::Bridge || e.kind == ToolKind::Commercial) &&
+            ImGui::Button("Try launch / open path")) {
+          std::string err;
+          if (commercial_try_launch(e.id, &err))
+            app.log("[+] launched " + e.id);
+          else
+            app.log("[!] " + err);
+        }
+      }
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Pipelines")) {
+      ImGui::TextWrapped("First-party native intake pipelines (authorized DFIR only).");
+      ImGui::InputText("Path / folder", app.catalog_pipe_out, sizeof(app.catalog_pipe_out));
+      ImGui::SameLine();
+      if (ImGui::Button("Browse##pipe")) {
+        auto p = open_file_dialog("All\0*.*\0");
+        if (!p.empty()) {
+          strncpy(app.catalog_pipe_out, p.c_str(), sizeof(app.catalog_pipe_out) - 1);
+        }
+      }
+      auto run_pipe = [&](const char* name, PipelineReport (*fn)(const std::string&)) {
+        auto rep = fn(app.catalog_pipe_out);
+        app.catalog_orch_out = std::string("[") + name + "]\n" + rep.summary;
+        if (!rep.hashcat_hint.empty()) app.catalog_orch_out += "\n" + rep.hashcat_hint;
+        for (size_t i = 0; i < rep.hits.size() && i < 12; ++i)
+          app.catalog_orch_out +=
+              "\n* " + rep.hits[i].kind + " " + rep.hits[i].path_or_offset + " | " + rep.hits[i].snippet;
+        app.log(app.catalog_orch_out);
+      };
+      if (ImGui::Button("MetaMask LevelDB")) run_pipe("metamask", pipeline_metamask_leveldb);
+      ImGui::SameLine();
+      if (ImGui::Button("Exodus SECO")) run_pipe("exodus", pipeline_exodus_seco);
+      ImGui::SameLine();
+      if (ImGui::Button("Electrum")) run_pipe("electrum", pipeline_electrum_helper);
+      if (ImGui::Button("OCR BIP39 intake")) run_pipe("ocr", pipeline_bip39_ocr_intake);
+      ImGui::SameLine();
+      if (ImGui::Button("Mbox seed scavenge")) run_pipe("mbox", pipeline_mbox_seed_scavenge);
+      ImGui::SameLine();
+      if (ImGui::Button("Dump scan")) run_pipe("dump", pipeline_volatile_dump_scan);
+      if (ImGui::Button("SQLite Core heuristic")) run_pipe("sqlite", pipeline_sqlite_core_wallet);
+      ImGui::SameLine();
+      if (ImGui::Button("KeePass/CSV bridge")) run_pipe("csv", pipeline_keepass_csv_bridge);
+      ImGui::SameLine();
+      if (ImGui::Button("Extension walker")) {
+        auto rep = pipeline_browser_extension_walker(app.catalog_pipe_out);
+        app.catalog_orch_out = rep.summary;
+        for (auto& h : rep.hits) app.catalog_orch_out += "\n* " + h.snippet + " @ " + h.path_or_offset;
+        app.log(app.catalog_orch_out);
+      }
+      if (ImGui::Button("AddressDB builder hook")) {
+        auto rep = pipeline_addressdb_builder_hook("data\\addressdb");
+        app.catalog_orch_out = rep.summary;
+        app.log(app.catalog_orch_out);
+      }
+      ImGui::Separator();
+      ImGui::InputText("Orchestrate input", app.catalog_intake_path, sizeof(app.catalog_intake_path));
+      if (ImGui::Button("Recommend + cheap scan chain")) {
+        auto rep = pipeline_orchestrate_intake(app.catalog_intake_path);
+        app.catalog_orch_out = rep.summary;
+        app.log(app.catalog_orch_out);
+      }
+      ImGui::BeginChild("pipeout", ImVec2(0, 0), true, ImGuiWindowFlags_HorizontalScrollbar);
+      ImGui::TextUnformatted(app.catalog_orch_out.c_str());
+      ImGui::EndChild();
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Integration Hub")) {
+      ImGui::TextWrapped(
+          "Commercial LE / on-chain tools are bridges only. Configure licensed install paths in "
+          "data/commercial_paths.ini. Never pirate. Chainalysis/TRM/Elliptic/Maltego label funds after "
+          "keys/addresses exist — they do not crack wallet.dat.");
+      for (auto& c : app.commercial_hub) {
+        ImGui::Separator();
+        ImGui::Text("%s — %s", c.name.c_str(), c.found ? "DETECTED" : "Install separately");
+        if (c.found) ImGui::TextWrapped("%s", c.detected_path.c_str());
+        ImGui::TextWrapped("TWC covers instead: %s", c.twc_covers_instead.c_str());
+        if (c.found && ImGui::Button(("Open##" + c.id).c_str())) {
+          std::string err;
+          commercial_try_launch(c.id, &err);
+        }
+      }
+      ImGui::Separator();
+      ImGui::InputText("Manual path (id=path after Set)", app.commercial_path_edit,
+                       sizeof(app.commercial_path_edit));
+      if (ImGui::Button("Set path for selected catalog commercial id")) {
+        if (app.catalog_selected >= 0 && app.catalog_selected < (int)app.catalog_rows.size()) {
+          commercial_set_user_path(app.catalog_rows[app.catalog_selected].id, app.commercial_path_edit);
+          catalog_refresh(app);
+          app.log("[+] saved commercial path for " + app.catalog_rows[app.catalog_selected].id);
+        } else {
+          app.log("[!] select a Commercial catalog row first");
+        }
+      }
+      ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
+  }
+}
+
 static void draw_lab_docs_tab(AppState& app) {
   ImGui::TextColored(ImVec4(0.78f, 0.62f, 0.28f, 1.f), "TrueWalletCollider // Forensic Suite");
   ImGui::TextWrapped("%s", experiment_help().c_str());
@@ -2327,10 +2528,16 @@ static void draw_lab_docs_tab(AppState& app) {
   ImGui::TextUnformatted("Workflow");
   ImGui::BulletText("Extract / Salvage / Passphrase Lab / AES Partial / dual-verify (core Recovery Lab).");
   ImGui::BulletText("Outside Box: VSS, ghosts, leftovers, memory import, multi-mkey, Two-Body, CSV, Keyhole, Time-Slice, …");
+  ImGui::BulletText("Tool Bay: full DFIR catalog (100+) + native pipelines + Commercial Integration Hub.");
   ImGui::BulletText("Verify: REAL/SUSPECT/FAKE/CORRUPT checklist (CLI --verify / --verify-plus).");
   ImGui::BulletText("Case: notes + evidence zip under cases/.");
   ImGui::BulletText("BTCRecover Lab + Hashcat Bridge: local third_party bundles after setup_forensics.bat.");
   ImGui::BulletText("Tools: BIP39, brainwallet, Base58/Bech32, hex/entropy, diff, strings, balance, triage.");
+  ImGui::Separator();
+  ImGui::TextUnformatted("Honesty");
+  ImGui::BulletText("Commercial crackers are bridges — not embedded free.");
+  ImGui::BulletText("Some GPU seed tools are experimental (clone/build).");
+  ImGui::BulletText("On-chain labeling ≠ local passphrase/AES crack.");
   ImGui::Separator();
   ImGui::TextUnformatted("Hibernation / RAM forensic guidance");
   ImGui::TextWrapped(
@@ -2408,6 +2615,8 @@ int RunGuiApp() {
   app.case_ids = case_list_ids();
   app.tools_status = detect_forensics_tools();
   app.hashcat_exe_cached = app.tools_status.hashcat;
+  catalog_refresh(app);
+  app.log(app.catalog_stats.summary);
   app.orch_opt.do_verify = true;
   app.orch_opt.do_carve = true;
   app.orch_opt.do_native_kdf = true;
@@ -2494,6 +2703,10 @@ int RunGuiApp() {
       }
       if (ImGui::BeginTabItem("Tools")) {
         draw_tools_tab(app);
+        ImGui::EndTabItem();
+      }
+      if (ImGui::BeginTabItem("Tool Bay")) {
+        draw_tool_bay_tab(app);
         ImGui::EndTabItem();
       }
       ImGui::EndTabBar();

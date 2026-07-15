@@ -16,7 +16,19 @@ TrueWalletCollider.exe
 ```
 
 Confirm brand bar: `TrueWalletCollider // Forensic Suite` · Made by TrueScent · SIMD status.  
-Bundles: `TrueWalletCollider.exe --tools-status`.
+Bundles + catalog: `TrueWalletCollider.exe --tools-status` · `TrueWalletCollider.exe --catalog-count`.
+
+---
+
+## Universal Tool Bay
+
+Open **Tool Bay** (left tabs).
+
+1. **Catalog** — searchable list of **all** DFIR research tools (100+). Filter by category; each row shows Run/Installed/Missing/Commercial/Idea status + docs notes.
+2. **Pipelines** — native MetaMask / Exodus / Electrum / OCR / mbox / dump / extension walker / SQLite / AddressDB / orchestrator.
+3. **Integration Hub** — commercial LE + on-chain: detect install or set licensed path; never pirate; see what TWC covers instead.
+
+Full inventory: [DFIR_CATALOG.md](DFIR_CATALOG.md).
 
 ---
 

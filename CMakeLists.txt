@@ -70,6 +70,8 @@ add_executable(TrueWalletCollider
   src/wallet/CpuSimd.cpp
   src/wallet/BreakerRebuild.cpp
   src/wallet/OutsideBox.cpp
+  src/wallet/ToolCatalog.cpp
+  src/wallet/NativePipelines.cpp
   src/crack/CrackEngine.cpp
   src/crypto/crypto_wallet.cpp
   src/crypto/secp256k1_lite.cpp

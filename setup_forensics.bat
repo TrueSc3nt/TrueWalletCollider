@@ -4,8 +4,11 @@ cd /d "%~dp0"
 
 echo =============================================
 echo  TrueWalletCollider - setup_forensics
-echo  Bundles Hashcat + Python + BTCRecover + John
+echo  Maximalist DFIR pack: Hashcat/John/BTCRecover
+echo  + pywallet, Volatility3, MetaMask/Exodus tools,
+echo  + seed/OCR clones, aLEAPP/iLEAPP, carvers, more
 echo  Made by TrueScent — authorized use only
+echo  https://t.me/TrueScent
 echo =============================================
 echo.
 
@@ -33,8 +36,40 @@ set "SEVEN="
 if exist "%ProgramFiles%\7-Zip\7z.exe" set "SEVEN=%ProgramFiles%\7-Zip\7z.exe"
 if exist "%ProgramFiles(x86)%\7-Zip\7z.exe" set "SEVEN=%ProgramFiles(x86)%\7-Zip\7z.exe"
 
+where git >nul 2>&1
+set "HASGIT=%ERRORLEVEL%"
+
+goto :clone_helper_defined
+:clone_repo
+rem %1=dir name under third_party  %2=git url
+set "TARGET=%TP%\%~1"
+if exist "%TARGET%\.git" (
+  echo [+] %~1 already cloned
+  exit /b 0
+)
+if exist "%TARGET%" (
+  echo [+] %~1 folder present
+  exit /b 0
+)
+if not "%HASGIT%"=="0" (
+  echo [!] git missing — skip clone %~1
+  set "ERR=1"
+  exit /b 1
+)
+echo [*] Cloning %~1 ...
+git clone --depth 1 "%~2" "%TARGET%"
+if errorlevel 1 (
+  echo [!] clone failed %~1
+  set "ERR=1"
+  exit /b 1
+)
+echo [+] Cloned %~1
+exit /b 0
+
+:clone_helper_defined
+
 echo.
-echo --- [1/4] Hashcat ---
+echo --- [1/N] Hashcat ---
 if exist "%HC_EXE%" (
   echo [+] Hashcat already present:
   "%HC_EXE%" --version 2>nul
@@ -50,8 +85,6 @@ if exist "%HC_EXE%" (
     mkdir "%STAGING%\hashcat_extract" 2>nul
     if defined SEVEN (
       "%SEVEN%" x "!HC_ZIP!" -o"%STAGING%\hashcat_extract" -y >nul
-    ) else if exist "%ProgramFiles%\7-Zip\7z.exe" (
-      "%ProgramFiles%\7-Zip\7z.exe" x "!HC_ZIP!" -o"%STAGING%\hashcat_extract" -y >nul
     ) else (
       where tar >nul 2>&1 && tar -xf "!HC_ZIP!" -C "%STAGING%\hashcat_extract" 2>nul
     )
@@ -78,7 +111,7 @@ if exist "%HC_EXE%" (
 )
 
 echo.
-echo --- [2/4] Embeddable Python ---
+echo --- [2/N] Embeddable Python ---
 if exist "%PY_EXE%" (
   echo [+] Python already present:
   "%PY_EXE%" --version 2>nul
@@ -102,7 +135,6 @@ if exist "%PY_EXE%" (
         >>"%%~fF" echo Lib\site-packages
         >>"%%~fF" echo import site
       )
-      REM Disable isolated ._pth so BTCRecover imports + PYTHONPATH work
       for %%F in ("%PY_DIR%\python*._pth") do move /y "%%~fF" "%%~fF.disabled" >nul 2>&1
       set "GETPIP=%STAGING%\get-pip.py"
       powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\fetch_file.ps1" -Url "https://bootstrap.pypa.io/get-pip.py" -OutFile "!GETPIP!"
@@ -114,7 +146,7 @@ if exist "%PY_EXE%" (
 )
 
 echo.
-echo --- [3/4] BTCRecover ---
+echo --- [3/N] BTCRecover ---
 if exist "%BTC_DIR%\btcrecover.py" (
   echo [+] BTCRecover already present
 ) else (
@@ -144,12 +176,12 @@ if exist "%BTC_DIR%\btcrecover.py" (
 )
 
 if exist "%PY_EXE%" if exist "%BTC_DIR%\requirements.txt" (
-  echo [*] pip install btcrecover requirements (best-effort)...
+  echo [*] pip install btcrecover requirements - best effort
   "%PY_EXE%" -m pip install -r "%BTC_DIR%\requirements.txt" --no-warn-script-location
 )
 
 echo.
-echo --- [4/4] John the Ripper (jumbo) ---
+echo --- [4/N] John the Ripper jumbo ---
 set "JOHN_EXE="
 if exist "%JOHN_DIR%\run\john.exe" set "JOHN_EXE=%JOHN_DIR%\run\john.exe"
 if exist "%JOHN_DIR%\john.exe" set "JOHN_EXE=%JOHN_DIR%\john.exe"
@@ -191,6 +223,85 @@ if defined JOHN_EXE (
   )
 )
 
+echo.
+echo --- [5/N] pywallet + forensic Python clones ---
+call :clone_repo pywallet https://github.com/jackjack-jj/pywallet.git
+call :clone_repo pywallet-gsc https://github.com/Great-Software-Company/pywallet.git
+call :clone_repo metamask_pwn https://github.com/cyclone-github/metamask_pwn.git
+call :clone_repo hashcat_26620_kernel https://github.com/cyclone-github/hashcat_26620_kernel.git
+call :clone_repo metamask-leveldb-forensic-tools https://github.com/alibabahalalmeat/metamask-leveldb-forensic-tools.git
+call :clone_repo seed-sweep https://github.com/freeide/seed-sweep.git
+call :clone_repo Image-Seed-Phrase-Finder https://github.com/Lahwom/Image-Seed-Phrase-Finder.git
+call :clone_repo seed_parser https://github.com/xironix/seed_parser.git
+call :clone_repo seed-phrase-scanner https://github.com/Arien10/seed-phrase-scanner.git
+call :clone_repo cupp https://github.com/Mebus/cupp.git
+call :clone_repo Autopsy-Plugins https://github.com/markmckinnon/Autopsy-Plugins.git
+
+echo.
+echo --- [6/N] Volatility3 via pip into embed python ---
+if exist "%PY_EXE%" (
+  echo [*] pip install volatility3 - best effort
+  "%PY_EXE%" -m pip install volatility3 --no-warn-script-location
+  if not exist "%TP%\volatility3" mkdir "%TP%\volatility3"
+  (
+    echo @echo off
+    echo "%%~dp0..\python\python.exe" -m volatility3 %%*
+  ) > "%TP%\volatility3\run_vol.bat"
+  echo [+] volatility3 launcher: third_party\volatility3\run_vol.bat
+) else (
+  echo [!] Python missing - skip volatility3
+  set "ERR=1"
+)
+
+echo.
+echo --- [7/N] Mobile LEAPP + experimental GPU seed repos ---
+call :clone_repo iLEAPP https://github.com/abrignoni/iLEAPP.git
+call :clone_repo aLEAPP https://github.com/abrignoni/ALEAPP.git
+call :clone_repo seedcat https://github.com/seed-cat/seedcat.git
+call :clone_repo Hydra https://github.com/Julienbxl/Hydra.git
+call :clone_repo CUDA_Mnemonic_Recovery https://github.com/XopMC/CUDA_Mnemonic_Recovery.git
+call :clone_repo WalletForge https://github.com/morningstarnasser/WalletForge.git
+call :clone_repo BitcoinCarver https://github.com/Haniamin90/BitcoinCarver.git
+call :clone_repo bip39-brute https://github.com/georg95/bip39-brute.git
+call :clone_repo bitcoin_electrum_cracking https://github.com/ipsbruno3/bitcoin_electrum_cracking.git
+call :clone_repo Exodus-Seco-To-Passphrase https://github.com/KaratelSH/Exodus-Seco-To-Passphrase.git
+call :clone_repo kwprocessor https://github.com/hashcat/kwprocessor.git
+call :clone_repo princeprocessor https://github.com/hashcat/princeprocessor.git
+call :clone_repo CeWL https://github.com/digininja/CeWL.git
+call :clone_repo plaso https://github.com/log2timeline/plaso.git
+
+echo.
+echo --- [8/N] PhotoRec/TestDisk portable - best effort ---
+if exist "%TP%\testdisk\photorec_win.exe" (
+  echo [+] PhotoRec already present
+) else if exist "%TP%\testdisk\photorec.exe" (
+  echo [+] PhotoRec already present
+) else (
+  set "TD_ZIP=%STAGING%\testdisk.zip"
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\fetch_file.ps1" -Url "https://www.cgsecurity.org/testdisk-7.2.win64.zip" -OutFile "!TD_ZIP!"
+  if errorlevel 1 (
+    echo [!] TestDisk/PhotoRec download failed — optional carve lane
+  ) else (
+    if exist "%STAGING%\td_extract" rmdir /s /q "%STAGING%\td_extract" 2>nul
+    mkdir "%STAGING%\td_extract" 2>nul
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath '!TD_ZIP!' -DestinationPath '%STAGING%\td_extract' -Force"
+    set "FOUND="
+    for /r "%STAGING%\td_extract" %%F in (photorec*.exe) do (
+      if not defined FOUND set "FOUND=%%~dpF"
+    )
+    if defined FOUND (
+      if exist "%TP%\testdisk" rmdir /s /q "%TP%\testdisk" 2>nul
+      mkdir "%TP%\testdisk" 2>nul
+      xcopy /E /I /Y "!FOUND!*" "%TP%\testdisk\" >nul
+      echo [+] TestDisk/PhotoRec installed
+    ) else (
+      echo [!] photorec exe not found after extract
+    )
+  )
+)
+
+echo.
+echo --- [9/N] Launchers + status ---
 if not exist "%ROOT%data\bip39_english.txt" (
   if not exist "%ROOT%data" mkdir "%ROOT%data"
   powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%scripts\fetch_file.ps1" -Url "https://raw.githubusercontent.com/bitcoin/bips/master/bip-0039/english.txt" -OutFile "%ROOT%data\bip39_english.txt"
@@ -224,13 +335,32 @@ if not exist "%ROOT%data\bip39_english.txt" (
 ) > "%TP%\run_john.bat"
 
 (
+  echo @echo off
+  echo cd /d "%%~dp0"
+  echo if not exist "python\python.exe" ^(echo [E] python missing ^& exit /b 1^)
+  echo if exist "pywallet\pywallet.py" ^("python\python.exe" "pywallet\pywallet.py" %%* ^& exit /b %%ERRORLEVEL%%^)
+  echo echo [E] pywallet missing
+  echo exit /b 1
+) > "%TP%\run_pywallet.bat"
+
+(
   echo TrueWalletCollider forensic bundle status
-  echo Made by TrueScent
+  echo Made by TrueScent — https://t.me/TrueScent
   echo.
   if exist "%HC_EXE%" (echo HASHCAT=OK) else (echo HASHCAT=MISSING)
   if exist "%PY_EXE%" (echo PYTHON=OK) else (echo PYTHON=MISSING)
   if exist "%BTC_DIR%\btcrecover.py" (echo BTCRECOVER=OK) else (echo BTCRECOVER=MISSING)
   if exist "%JOHN_DIR%\run\john.exe" (echo JOHN=OK) else if exist "%JOHN_DIR%\john.exe" (echo JOHN=OK) else (echo JOHN=MISSING)
+  if exist "%TP%\pywallet\pywallet.py" (echo PYWALLET=OK) else (echo PYWALLET=MISSING)
+  if exist "%TP%\metamask_pwn" (echo METAMASK_PWN=OK) else (echo METAMASK_PWN=MISSING)
+  if exist "%TP%\volatility3\run_vol.bat" (echo VOLATILITY3=OK) else (echo VOLATILITY3=MISSING)
+  if exist "%TP%\iLEAPP" (echo ILEAPP=OK) else (echo ILEAPP=MISSING)
+  if exist "%TP%\aLEAPP" (echo ALEAPP=OK) else (echo ALEAPP=MISSING)
+  if exist "%TP%\seedcat" (echo SEEDCAT=OK) else (echo SEEDCAT=MISSING)
+  if exist "%TP%\Hydra" (echo HYDRA=OK) else (echo HYDRA=MISSING)
+  if exist "%TP%\CUDA_Mnemonic_Recovery" (echo CUDA_MNEMONIC=OK) else (echo CUDA_MNEMONIC=MISSING)
+  if exist "%TP%\testdisk" (echo PHOTOREC=OK) else (echo PHOTOREC=MISSING)
+  if exist "%HC_DIR%\tools\exodus2hashcat.py" (echo EXODUS2HASHCAT=OK) else (echo EXODUS2HASHCAT=CHECK_HASHCAT_TOOLS)
 ) > "%TP%\FORENSICS_STATUS.txt"
 
 echo.
@@ -255,7 +385,10 @@ if exist "%JOHN_DIR%\run\john.exe" (
 ) else echo [!] john missing
 
 echo.
-echo Launchers: third_party\run_hashcat.bat / run_btcrecover.bat / run_john.bat
+echo Launchers: third_party\run_*.bat
 echo Status:    third_party\FORENSICS_STATUS.txt
+echo Catalog:   TrueWalletCollider.exe --catalog-count / --tools-status
+echo GUI:       Tool Bay tab
+echo Commercial tools: install licensed copies separately ^(Integration Hub^)
 echo Telegram:  https://t.me/TrueScent
 exit /b 0

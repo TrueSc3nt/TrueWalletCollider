@@ -8,6 +8,8 @@
 #include "wallet/ForensicVerify.h"
 #include "wallet/ToolBridge.h"
 #include "wallet/OutsideBox.h"
+#include "wallet/ToolCatalog.h"
+#include "wallet/NativePipelines.h"
 #include "crypto/crypto_wallet.h"
 #include "crypto/secp256k1_lite.h"
 
@@ -39,11 +41,14 @@ static void usage() {
       "  --csv-bridge FILE                  password-manager CSV → wordlist stdout\n"
       "  --keyhole PREFIX_HEX               Keyhole plan (wires to AES Partial)\n"
       "  --experiment NAME                  research harness (help|dual_fp|passphrase|secp|hashcat_fmt)\n"
-      "  --tools-status                     show bundled Hashcat/BTCRecover/John/Python\n"
+      "  --tools-status                     full DFIR catalog + bundle detectors\n"
+      "  --catalog-count                    print Universal Tool Bay entry count\n"
+      "  --pipeline NAME PATH               native intake (metamask|exodus|mbox|ocr|dump|ext|sqlite|orch)\n"
       "  --partial-help                     document AES partial-key GPU mode\n\n"
       "Honest scope: passphrase/KDF + dual-verify + salvage + Outside Box archaeology.\n"
       "Raw full AES-256 search of unknown keys is research/partial-key only (2^256).\n"
-      "Optional bundles: run setup_forensics.bat → third_party\\{hashcat,python,btcrecover,john}\n");
+      "Commercial tools = Integration Hub bridges only (never pirate).\n"
+      "Optional bundles: run setup_forensics.bat → third_party\\...\n");
 }
 
 int RunHeadlessCli(int argc, char** argv) {
@@ -138,7 +143,53 @@ int main(int argc, char** argv) {
     if (a == "--tools-status") {
       auto s = detect_forensics_tools();
       std::fputs(s.status_text.c_str(), stdout);
-      return (s.hashcat.empty() && s.btcrecover.empty()) ? 2 : 0;
+      std::fputc('\n', stdout);
+      std::fputs(tool_catalog_status_report().c_str(), stdout);
+      auto rows = tool_catalog_refresh();
+      auto st = tool_catalog_stats(rows);
+      return (s.hashcat.empty() && s.btcrecover.empty() && st.native_runnable == 0) ? 2 : 0;
+    }
+    if (a == "--catalog-count") {
+      auto rows = tool_catalog_refresh();
+      auto st = tool_catalog_stats(rows);
+      std::printf("CATALOG_ENTRIES=%d\n", st.total);
+      std::printf("NATIVE_RUNNABLE=%d\n", st.native_runnable);
+      std::printf("SETUP_INSTALLED=%d\n", st.setup_installed);
+      std::printf("SETUP_MISSING=%d\n", st.setup_missing);
+      std::printf("BRIDGE=%d\n", st.bridge);
+      std::printf("COMMERCIAL=%d\n", st.commercial);
+      std::printf("EXPERIMENTAL=%d\n", st.experimental);
+      std::printf("IDEA=%d\n", st.idea);
+      std::fputs(st.summary.c_str(), stdout);
+      return 0;
+    }
+    if (a == "--pipeline" && argc >= 4) {
+      std::string name = argv[2];
+      std::string path = argv[3];
+      PipelineReport rep;
+      if (name == "metamask")
+        rep = pipeline_metamask_leveldb(path);
+      else if (name == "exodus")
+        rep = pipeline_exodus_seco(path);
+      else if (name == "mbox")
+        rep = pipeline_mbox_seed_scavenge(path);
+      else if (name == "ocr")
+        rep = pipeline_bip39_ocr_intake(path);
+      else if (name == "dump")
+        rep = pipeline_volatile_dump_scan(path);
+      else if (name == "ext")
+        rep = pipeline_browser_extension_walker(path);
+      else if (name == "sqlite")
+        rep = pipeline_sqlite_core_wallet(path);
+      else if (name == "orch")
+        rep = pipeline_orchestrate_intake(path);
+      else {
+        std::fprintf(stderr, "unknown pipeline\n");
+        return 2;
+      }
+      std::puts(rep.summary.c_str());
+      if (!rep.hashcat_hint.empty()) std::puts(rep.hashcat_hint.c_str());
+      return rep.ok ? 0 : 2;
     }
     if (a == "--verify" && argc >= 3) {
       std::string arg = argv[2];
