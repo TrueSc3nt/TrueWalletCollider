@@ -63,6 +63,12 @@ add_executable(TrueWalletCollider
   src/wallet/Salvage.cpp
   src/wallet/Archaeology.cpp
   src/wallet/Experiment.cpp
+  src/wallet/ForensicVerify.cpp
+  src/wallet/CaseManager.cpp
+  src/wallet/ForensicTools.cpp
+  src/wallet/ToolBridge.cpp
+  src/wallet/CpuSimd.cpp
+  src/wallet/BreakerRebuild.cpp
   src/crack/CrackEngine.cpp
   src/crypto/crypto_wallet.cpp
   src/crypto/secp256k1_lite.cpp
@@ -87,7 +93,7 @@ target_link_libraries(TrueWalletCollider PRIVATE
 )
 
 if(WIN32)
-  target_link_libraries(TrueWalletCollider PRIVATE opengl32 comdlg32 shell32 ole32)
+  target_link_libraries(TrueWalletCollider PRIVATE opengl32 comdlg32 shell32 ole32 winhttp)
   target_compile_definitions(TrueWalletCollider PRIVATE
     _CRT_SECURE_NO_WARNINGS
     GLFW_INCLUDE_NONE

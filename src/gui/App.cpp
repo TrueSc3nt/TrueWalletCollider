@@ -10,6 +10,12 @@
 #include "../wallet/Salvage.h"
 #include "../wallet/Archaeology.h"
 #include "../wallet/Experiment.h"
+#include "../wallet/ForensicVerify.h"
+#include "../wallet/CaseManager.h"
+#include "../wallet/ForensicTools.h"
+#include "../wallet/ToolBridge.h"
+#include "../wallet/CpuSimd.h"
+#include "../wallet/BreakerRebuild.h"
 
 #define GLAD_GL_IMPLEMENTATION
 #include <glad/gl.h>
@@ -116,6 +122,69 @@ struct AppState {
   char hashcat_export_path[260] = "wallet_hash.txt";
   char hashcat_wordlist[512] = {};
   std::string hashcat_exe_cached;
+  ProcessStreamer hashcat_stream;
+  ToolDetectStatus tools_status;
+
+  /* Verify */
+  VerifyReport verify_report;
+  bool has_verify = false;
+  char verify_input[1024] = {};
+
+  /* Case management */
+  char case_title[128] = {};
+  char case_operator[64] = "operator";
+  char case_note[1024] = {};
+  char case_id_buf[128] = {};
+  CaseRecord current_case;
+  bool has_case = false;
+  std::vector<std::string> case_ids;
+  char case_zip_path[260] = "case_export.zip";
+
+  /* BTCRecover Lab */
+  char btc_wallet[512] = {};
+  char btc_tokenlist[512] = {};
+  char btc_passwordlist[512] = {};
+  char btc_extra[256] = {};
+  char btc_mnemonic[512] = {};
+  bool btc_bip39 = false;
+  bool btc_electrum = false;
+  bool btc_typos = false;
+  bool btc_seedrecover = false;
+  int btc_typo_max = 1;
+  ProcessStreamer btc_stream;
+
+  /* Forensic tools pane */
+  char bip39_mnemonic[1024] = {};
+  char brain_pass[256] = {};
+  char base58_hex[512] = {};
+  char bech32_hrp[32] = "bc";
+  char bech32_prog_hex[128] = {};
+  int bech32_witver = 0;
+  char hexdump_path[512] = {};
+  char diff_path_a[512] = {};
+  char diff_path_b[512] = {};
+  char strings_path[512] = {};
+  char balance_addr[128] = {};
+  bool balance_http = false;
+  char triage_folder[512] = {};
+  std::string tools_panel_out;
+  std::vector<TriageWalletRow> triage_rows;
+  std::vector<StringsHit> strings_hits;
+
+  /* Breaker & Rebuild Lab */
+  OrchestratorOptions orch_opt;
+  OrchestratorReport orch_report;
+  bool has_orch = false;
+  CarveReport carve_report;
+  bool has_carve = false;
+  char rebuild_new_pass[256] = {};
+  char rebuild_out_prefix[260] = "rebuild_export";
+  int rebuild_iters = 50000;
+  RebuildPackage rebuild_pkg;
+  bool has_rebuild = false;
+  char orch_dict[512] = {};
+  char orch_tokenlist[512] = {};
+  bool about_open = false;
 
   /* Results */
   DualVerifyResult last_dual;
@@ -375,15 +444,58 @@ static void draw_brand_bar(AppState& app) {
   ImGui::TextUnformatted("TrueWalletCollider");
   ImGui::PopStyleColor();
   ImGui::SameLine();
-  ImGui::TextColored(ImVec4(0.55f, 0.52f, 0.45f, 0.95f), "  // Recovery Lab");
-  ImGui::SameLine(ImGui::GetWindowWidth() - 280);
+  ImGui::TextColored(ImVec4(0.55f, 0.52f, 0.45f, 0.95f), "  // Forensic Suite");
+  ImGui::SameLine();
+  ImGui::TextDisabled("  Made by TrueScent");
+  const auto& cpu = cpu_simd_detect();
+  ImGui::SameLine(ImGui::GetWindowWidth() - 420);
+  ImGui::TextColored(ImVec4(0.45f, 0.75f, 0.9f, 1.f), "%s", cpu.status_line.c_str());
+  ImGui::SameLine();
   if (ImGui::SmallButton(app.light_theme ? "Noir" : "Light")) {
     app.light_theme = !app.light_theme;
     ApplyTrueScentTheme(app.light_theme);
   }
   ImGui::SameLine();
-  ImGui::TextDisabled("wallet.dat + CUDA + passphrase lab");
+  if (ImGui::SmallButton("About")) app.about_open = true;
   ImGui::Separator();
+  ImGui::TextColored(ImVec4(0.9f, 0.55f, 0.35f, 1.f),
+                     "AUTHORIZED USE ONLY — owner recovery / DFIR under authority");
+  ImGui::SameLine(ImGui::GetWindowWidth() - 200);
+  if (ImGui::SmallButton("t.me/TrueScent")) {
+#ifdef _WIN32
+    ShellExecuteA(nullptr, "open", "https://t.me/TrueScent", nullptr, nullptr, SW_SHOWNORMAL);
+#endif
+  }
+  ImGui::Separator();
+}
+
+static void draw_about_modal(AppState& app) {
+  if (!app.about_open) return;
+  ImGui::OpenPopup("About TrueWalletCollider");
+  if (ImGui::BeginPopupModal("About TrueWalletCollider", &app.about_open,
+                             ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::TextColored(ImVec4(0.78f, 0.62f, 0.28f, 1.f), "TrueWalletCollider");
+    ImGui::Text("Forensic Suite / Recovery Lab");
+    ImGui::Text("Made by TrueScent");
+    ImGui::Separator();
+    ImGui::TextWrapped(
+        "Authorized wallet owners, businesses, and DFIR under clear legal authority only. "
+        "Unauthorized access is illegal. Classic Bitcoin Core wallet.dat typically has no BIP39 "
+        "seed — Breaker Lab will say so honestly.");
+    ImGui::Separator();
+    ImGui::Text("Telegram: https://t.me/TrueScent");
+    if (ImGui::Button("Open Telegram")) {
+#ifdef _WIN32
+      ShellExecuteA(nullptr, "open", "https://t.me/TrueScent", nullptr, nullptr, SW_SHOWNORMAL);
+#endif
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Close")) {
+      app.about_open = false;
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
 }
 
 static void draw_archaeology_flags(AppState& app) {
@@ -847,44 +959,418 @@ static void draw_aes_partial_tab(AppState& app) {
 }
 
 static void draw_hashcat_bridge_tab(AppState& app) {
+  ImGui::TextWrapped(
+      "AUTHORIZED USE ONLY — exports $bitcoin$ for Hashcat -m 11300 / John. "
+      "Run setup_forensics.bat to bundle hashcat.exe under third_party\\hashcat\\.");
+  ImGui::Separator();
+  app.tools_status = detect_forensics_tools();
+  ImGui::TextWrapped("%s", app.tools_status.status_text.c_str());
+  if (ImGui::Button("Rescan tools")) {
+    app.tools_status = detect_forensics_tools();
+    app.hashcat_exe_cached = app.tools_status.hashcat;
+    app.log("[+] rescanned forensic tools");
+  }
+
   if (!app.has_wallet || !app.wallet.mkey.found) {
     ImGui::TextDisabled("Load wallet with mkey to export $bitcoin$ hash.");
-    return;
+  } else {
+    std::string line = export_bitcoin_hashcat_line_extended(app.wallet);
+    ImGui::TextWrapped("Hashcat mode -m 11300 (Bitcoin Core wallet.dat)");
+    ImGui::BeginChild("hcline", ImVec2(-1, 60), true);
+    ImGui::TextWrapped("%s", line.c_str());
+    ImGui::EndChild();
+    if (ImGui::Button("Copy $bitcoin$ line")) set_clipboard(line);
+    ImGui::InputText("Export path", app.hashcat_export_path, sizeof(app.hashcat_export_path));
+    if (ImGui::Button("Write hash file")) {
+      if (write_hashcat_file(app.wallet, app.hashcat_export_path, true))
+        app.log("[+] wrote " + std::string(app.hashcat_export_path));
+      else
+        app.log("[E] hash export failed");
+    }
   }
-  std::string line = export_bitcoin_hashcat_line_extended(app.wallet);
-  ImGui::TextWrapped("Hashcat mode -m 11300 (Bitcoin Core wallet.dat)");
-  ImGui::BeginChild("hcline", ImVec2(-1, 60), true);
-  ImGui::TextWrapped("%s", line.c_str());
-  ImGui::EndChild();
-  if (ImGui::Button("Copy $bitcoin$ line")) set_clipboard(line);
 
-  ImGui::InputText("Export path", app.hashcat_export_path, sizeof(app.hashcat_export_path));
-  if (ImGui::Button("Write hash file")) {
-    if (write_hashcat_file(app.wallet, app.hashcat_export_path, true))
-      app.log("[+] wrote " + std::string(app.hashcat_export_path));
-    else
-      app.log("[E] hash export failed");
-  }
   if (app.hashcat_exe_cached.empty()) app.hashcat_exe_cached = find_hashcat_exe();
   ImGui::Text("hashcat: %s",
-              app.hashcat_exe_cached.empty() ? "(not found — run setup_forensics.bat or add PATH)"
+              app.hashcat_exe_cached.empty() ? "(not found — run setup_forensics.bat)"
                                              : app.hashcat_exe_cached.c_str());
-  if (ImGui::Button("Rescan hashcat")) {
-    app.hashcat_exe_cached = find_hashcat_exe();
-    app.log(app.hashcat_exe_cached.empty() ? "[!] hashcat still missing"
-                                           : "[+] hashcat: " + app.hashcat_exe_cached);
-  }
   ImGui::InputText("Wordlist (optional)", app.hashcat_wordlist, sizeof(app.hashcat_wordlist));
-  if (ImGui::Button("Spawn hashcat -m 11300")) {
+  if (ImGui::Button("Browse wordlist")) {
+    auto p = open_file_dialog("Text\0*.txt\0All\0*.*\0");
+    if (!p.empty()) {
+      strncpy(app.hashcat_wordlist, p.c_str(), sizeof(app.hashcat_wordlist) - 1);
+    }
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Spawn hashcat (new console)")) {
     app.hashcat_exe_cached = find_hashcat_exe();
     auto r = spawn_hashcat_attack(app.hashcat_export_path, app.hashcat_wordlist, app.hashcat_exe_cached);
     app.log(r.message);
   }
+  ImGui::SameLine();
+  if (ImGui::Button("Spawn + stream output")) {
+    app.hashcat_exe_cached = find_hashcat_exe();
+    auto r = spawn_hashcat_streamed(app.hashcat_export_path, app.hashcat_wordlist,
+                                    app.hashcat_exe_cached, &app.hashcat_stream);
+    app.log(r.message);
+  }
+  if (app.hashcat_stream.running()) {
+    ImGui::SameLine();
+    if (ImGui::Button("Stop stream")) app.hashcat_stream.stop();
+  }
+  ImGui::BeginChild("hcstream", ImVec2(-1, 140), true);
+  ImGui::TextUnformatted(app.hashcat_stream.snapshot().c_str());
+  ImGui::EndChild();
+
   ImGui::Separator();
+  ImGui::TextUnformatted("John the Ripper");
+  if (ImGui::Button("Spawn john --format=bitcoin")) {
+    ProcessStreamer* unused = nullptr;
+    auto r = spawn_john_bitcoin(app.hashcat_export_path, unused);
+    app.log(r.message);
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("John + stream")) {
+    auto r = spawn_john_bitcoin(app.hashcat_export_path, &app.hashcat_stream);
+    app.log(r.message);
+  }
   ImGui::TextWrapped(
       "Manual: hashcat -m 11300 -a 0 wallet_hash.txt wordlist.txt\n"
-      "Bundled path after setup: third_party\\hashcat\\hashcat.exe\n"
-      "John the Ripper: bitcoin2john wallet.dat > hash.txt");
+      "Bundled: third_party\\hashcat\\hashcat.exe after setup_forensics.bat");
+}
+
+static void draw_verify_tab(AppState& app) {
+  ImGui::TextColored(ImVec4(0.9f, 0.55f, 0.35f, 1.f), "AUTHORIZED USE ONLY");
+  ImGui::TextWrapped(
+      "Classify evidence as REAL / SUSPECT / FAKE / CORRUPT — wallet.dat, $bitcoin$ lines, "
+      "or pasted mkey/ckey text.");
+  ImGui::InputText("Path or $bitcoin$ / paste", app.verify_input, sizeof(app.verify_input));
+  if (ImGui::Button("Browse wallet.dat")) {
+    auto p = open_file_dialog();
+    if (!p.empty()) strncpy(app.verify_input, p.c_str(), sizeof(app.verify_input) - 1);
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Verify loaded wallet") && app.has_wallet) {
+    app.verify_report = verify_parsed_wallet(app.wallet);
+    app.has_verify = true;
+    app.log(app.verify_report.summary);
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Run verify")) {
+    std::string s = app.verify_input;
+    if (s.rfind("$bitcoin$", 0) == 0)
+      app.verify_report = verify_bitcoin_hash_line(s);
+    else if (!s.empty()) {
+      std::ifstream f(s, std::ios::binary);
+      if (f)
+        app.verify_report = verify_wallet_file(s);
+      else
+        app.verify_report = verify_mkey_ckey_text(s);
+    } else if (app.has_wallet) {
+      app.verify_report = verify_parsed_wallet(app.wallet);
+    }
+    app.has_verify = true;
+    app.log(app.verify_report.summary);
+  }
+  if (!app.has_verify) {
+    ImGui::TextDisabled("No verify report yet.");
+    return;
+  }
+  ImVec4 col = ImVec4(0.7f, 0.7f, 0.7f, 1.f);
+  if (app.verify_report.verdict == VerifyVerdict::REAL) col = ImVec4(0.45f, 0.9f, 0.5f, 1.f);
+  else if (app.verify_report.verdict == VerifyVerdict::SUSPECT) col = ImVec4(0.95f, 0.75f, 0.25f, 1.f);
+  else if (app.verify_report.verdict == VerifyVerdict::FAKE) col = ImVec4(0.95f, 0.4f, 0.35f, 1.f);
+  else if (app.verify_report.verdict == VerifyVerdict::CORRUPT) col = ImVec4(0.95f, 0.55f, 0.2f, 1.f);
+  ImGui::TextColored(col, "Verdict: %s", app.verify_report.verdict_label.c_str());
+  ImGui::TextWrapped("%s", app.verify_report.summary.c_str());
+  if (ImGui::BeginTable("vchk", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
+                        ImVec2(0, 280))) {
+    ImGui::TableSetupColumn("Check");
+    ImGui::TableSetupColumn("Pass");
+    ImGui::TableSetupColumn("Detail");
+    ImGui::TableHeadersRow();
+    for (auto& c : app.verify_report.checks) {
+      ImGui::TableNextRow();
+      ImGui::TableSetColumnIndex(0);
+      ImGui::TextUnformatted(c.name.c_str());
+      ImGui::TableSetColumnIndex(1);
+      ImGui::TextColored(c.pass ? ImVec4(0.45f, 0.9f, 0.5f, 1.f) : ImVec4(0.95f, 0.4f, 0.35f, 1.f),
+                         "%s", c.pass ? "OK" : "FAIL");
+      ImGui::TableSetColumnIndex(2);
+      ImGui::TextWrapped("%s", c.detail.c_str());
+    }
+    ImGui::EndTable();
+  }
+  if (ImGui::Button("Copy report")) set_clipboard(verify_report_text(app.verify_report));
+}
+
+static void draw_case_tab(AppState& app) {
+  ImGui::TextColored(ImVec4(0.9f, 0.55f, 0.35f, 1.f), "AUTHORIZED USE ONLY — case / evidence hygiene");
+  ImGui::TextWrapped("Cases live under cases/<id>/ with notes, artifacts, and zip export.");
+  ImGui::InputText("Title", app.case_title, sizeof(app.case_title));
+  ImGui::InputText("Operator", app.case_operator, sizeof(app.case_operator));
+  if (ImGui::Button("Create case")) {
+    std::string ev = app.has_wallet ? app.wallet.path : "";
+    app.current_case = case_create(app.case_title, app.case_operator, ev);
+    app.has_case = true;
+    strncpy(app.case_id_buf, app.current_case.id.c_str(), sizeof(app.case_id_buf) - 1);
+    app.case_ids = case_list_ids();
+    app.log("[+] case " + app.current_case.id);
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Refresh list")) app.case_ids = case_list_ids();
+  if (ImGui::BeginCombo("Open case", app.case_id_buf[0] ? app.case_id_buf : "(select)")) {
+    for (auto& id : app.case_ids) {
+      if (ImGui::Selectable(id.c_str(), id == app.case_id_buf)) {
+        strncpy(app.case_id_buf, id.c_str(), sizeof(app.case_id_buf) - 1);
+        app.current_case = case_load(id);
+        app.has_case = true;
+      }
+    }
+    ImGui::EndCombo();
+  }
+  ImGui::InputTextMultiline("Note", app.case_note, sizeof(app.case_note), ImVec2(-1, 80));
+  if (ImGui::Button("Append note") && app.case_id_buf[0]) {
+    if (case_append_note(app.case_id_buf, app.case_operator, app.case_note)) {
+      app.current_case = case_load(app.case_id_buf);
+      app.case_note[0] = 0;
+      app.log("[+] note appended");
+    }
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Add loaded wallet as artifact") && app.has_wallet && app.case_id_buf[0]) {
+    if (case_add_artifact(app.case_id_buf, app.wallet.path)) {
+      app.current_case = case_load(app.case_id_buf);
+      app.log("[+] artifact copied");
+    }
+  }
+  ImGui::InputText("Zip export path", app.case_zip_path, sizeof(app.case_zip_path));
+  if (ImGui::Button("Export evidence zip") && app.case_id_buf[0]) {
+    std::string msg;
+    if (case_export_zip(app.case_id_buf, app.case_zip_path, &msg))
+      app.log("[+] " + msg);
+    else
+      app.log("[E] " + msg);
+  }
+  if (app.has_case) {
+    ImGui::Separator();
+    ImGui::BeginChild("caseview", ImVec2(0, 0), true);
+    ImGui::TextUnformatted(case_summary_text(app.current_case).c_str());
+    ImGui::EndChild();
+  }
+}
+
+static void draw_btcrecover_lab_tab(AppState& app) {
+  ImGui::TextColored(ImVec4(0.9f, 0.55f, 0.35f, 1.f), "AUTHORIZED USE ONLY — BTCRecover Lab");
+  ImGui::TextWrapped(
+      "GUI front-end for bundled BTCRecover + embeddable Python "
+      "(third_party\\btcrecover + third_party\\python after setup_forensics.bat).");
+  auto det = detect_forensics_tools();
+  ImGui::TextWrapped("Python: %s", det.python.empty() ? "MISSING" : det.python.c_str());
+  ImGui::TextWrapped("BTCRecover: %s", det.btcrecover.empty() ? "MISSING" : det.btcrecover.c_str());
+  if (ImGui::Button("Show --help (stream)")) {
+    BtcRecoverOptions opt;
+    opt.extra_args = "--help";
+    auto r = spawn_btcrecover(opt, &app.btc_stream);
+    app.log(r.message);
+  }
+  ImGui::InputText("wallet.dat", app.btc_wallet, sizeof(app.btc_wallet));
+  ImGui::SameLine();
+  if (ImGui::Button("Browse##btcwal")) {
+    auto p = open_file_dialog();
+    if (!p.empty()) strncpy(app.btc_wallet, p.c_str(), sizeof(app.btc_wallet) - 1);
+  }
+  ImGui::InputText("tokenlist", app.btc_tokenlist, sizeof(app.btc_tokenlist));
+  ImGui::SameLine();
+  if (ImGui::Button("Browse##btctok")) {
+    auto p = open_file_dialog("Text\0*.txt\0All\0*.*\0");
+    if (!p.empty()) strncpy(app.btc_tokenlist, p.c_str(), sizeof(app.btc_tokenlist) - 1);
+  }
+  ImGui::InputText("passwordlist", app.btc_passwordlist, sizeof(app.btc_passwordlist));
+  ImGui::Checkbox("BIP39 mode", &app.btc_bip39);
+  ImGui::SameLine();
+  ImGui::Checkbox("Electrum", &app.btc_electrum);
+  ImGui::SameLine();
+  ImGui::Checkbox("seedrecover.py", &app.btc_seedrecover);
+  ImGui::Checkbox("Typos", &app.btc_typos);
+  ImGui::SameLine();
+  ImGui::InputInt("typo max", &app.btc_typo_max);
+  ImGui::InputText("mnemonic (optional)", app.btc_mnemonic, sizeof(app.btc_mnemonic));
+  ImGui::InputText("Extra CLI args", app.btc_extra, sizeof(app.btc_extra));
+  if (ImGui::Button("Build cmdline (copy)")) {
+    BtcRecoverOptions opt;
+    opt.wallet_dat = app.btc_wallet;
+    opt.tokenlist = app.btc_tokenlist;
+    opt.passwordlist = app.btc_passwordlist;
+    opt.bip39_mode = app.btc_bip39;
+    opt.electrum_mode = app.btc_electrum;
+    opt.typos = app.btc_typos;
+    opt.typo_max = app.btc_typo_max;
+    opt.extra_args = app.btc_extra;
+    opt.bip39_mnemonic = app.btc_mnemonic;
+    opt.seedrecover = app.btc_seedrecover;
+    std::string cmd = build_btcrecover_cmdline(opt);
+    set_clipboard(cmd);
+    app.log(cmd.empty() ? "[E] incomplete — run setup_forensics.bat" : "[+] cmdline copied");
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Launch + stream")) {
+    BtcRecoverOptions opt;
+    opt.wallet_dat = app.btc_wallet;
+    opt.tokenlist = app.btc_tokenlist;
+    opt.passwordlist = app.btc_passwordlist;
+    opt.bip39_mode = app.btc_bip39;
+    opt.electrum_mode = app.btc_electrum;
+    opt.typos = app.btc_typos;
+    opt.typo_max = app.btc_typo_max;
+    opt.extra_args = app.btc_extra;
+    opt.bip39_mnemonic = app.btc_mnemonic;
+    opt.seedrecover = app.btc_seedrecover;
+    auto r = spawn_btcrecover(opt, &app.btc_stream);
+    app.log(r.message);
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Stop") && app.btc_stream.running()) app.btc_stream.stop();
+  ImGui::BeginChild("btcstream", ImVec2(0, 0), true);
+  ImGui::TextUnformatted(app.btc_stream.snapshot().c_str());
+  ImGui::EndChild();
+}
+
+static void draw_breaker_rebuild_tab(AppState& app) {
+  ImGui::TextColored(ImVec4(0.78f, 0.62f, 0.28f, 1.f), "TrueScent Wallet Breaker / Rebuild Lab");
+  ImGui::TextDisabled("Made by TrueScent — authorized owner rematerialization only");
+  ImGui::TextWrapped(
+      "Break = orchestrate verify + carve + native CPU KDF (+ AVX workers) + Hashcat/John/BTCRecover. "
+      "Rebuild = decrypt keys, optional re-encrypt mkey under YOUR passphrase, export WIF/JSON. "
+      "Does NOT invent BIP39 seeds for classic Core wallets that never stored one.");
+  ImGui::TextColored(ImVec4(0.45f, 0.75f, 0.9f, 1.f), "%s", cpu_simd_detect().status_line.c_str());
+  ImGui::Separator();
+
+  if (ImGui::BeginTabBar("breaker_inner")) {
+    if (ImGui::BeginTabItem("1 · Break")) {
+      ImGui::Checkbox("Verify REAL/FAKE", &app.orch_opt.do_verify);
+      ImGui::SameLine();
+      ImGui::Checkbox("Carve", &app.orch_opt.do_carve);
+      ImGui::SameLine();
+      ImGui::Checkbox("Native KDF (CPU)", &app.orch_opt.do_native_kdf);
+      ImGui::Checkbox("Hashcat -m 11300", &app.orch_opt.do_hashcat);
+      ImGui::SameLine();
+      ImGui::Checkbox("John bitcoin", &app.orch_opt.do_john);
+      ImGui::SameLine();
+      ImGui::Checkbox("BTCRecover", &app.orch_opt.do_btcrecover);
+      ImGui::Checkbox("CUDA partial hint", &app.orch_opt.do_cuda_partial);
+      ImGui::SameLine();
+      ImGui::Checkbox("Use CPU", &app.orch_opt.use_cpu);
+      ImGui::SameLine();
+      ImGui::Checkbox("Use GPU", &app.orch_opt.use_gpu);
+      ImGui::InputText("Dictionary / passwordlist", app.orch_dict, sizeof(app.orch_dict));
+      ImGui::SameLine();
+      if (ImGui::Button("Browse##orchd")) {
+        auto p = open_file_dialog("Text\0*.txt\0All\0*.*\0");
+        if (!p.empty()) strncpy(app.orch_dict, p.c_str(), sizeof(app.orch_dict) - 1);
+      }
+      ImGui::InputText("BTCRecover tokenlist", app.orch_tokenlist, sizeof(app.orch_tokenlist));
+      ImGui::InputText("Partial AES prefix", app.partial_prefix, sizeof(app.partial_prefix));
+      ImGui::InputInt("Max native tries", &app.orch_opt.max_native_tries);
+      if (ImGui::Button("RUN ORCHESTRATOR", ImVec2(220, 36))) {
+        if (!app.has_wallet) {
+          app.log("[E] load wallet first");
+        } else {
+          app.orch_opt.dict_path = app.orch_dict;
+          app.orch_opt.tokenlist = app.orch_tokenlist;
+          app.orch_opt.partial_prefix_hex = app.partial_prefix;
+          if (app.dict_path[0]) {
+            /* also pull recall candidates if generated */
+          }
+          if (!app.candidates.empty())
+            app.orch_opt.passphrase_candidates = app.candidates;
+          else if (app.single_pass[0])
+            app.orch_opt.passphrase_candidates = {app.single_pass};
+          app.orch_report =
+              breaker_orchestrate(app.wallet, app.wallet_raw, app.orch_opt, &app.hashcat_stream,
+                                  &app.btc_stream);
+          app.has_orch = true;
+          app.log(app.orch_report.log);
+          if (app.orch_report.success) {
+            strncpy(app.recovered_master_hex, app.orch_report.master_hex.c_str(),
+                    sizeof(app.recovered_master_hex) - 1);
+            app.has_last_dual = app.orch_report.has_dual;
+            app.last_dual = app.orch_report.dual;
+          }
+        }
+      }
+      if (app.has_orch) {
+        ImGui::BeginChild("orchlog", ImVec2(0, 0), true);
+        ImGui::TextUnformatted(app.orch_report.log.c_str());
+        for (auto& s : app.orch_report.steps) {
+          ImGui::BulletText("%s: %s", s.name.c_str(), s.detail.c_str());
+        }
+        ImGui::EndChild();
+      }
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("2 · Carve")) {
+      if (ImGui::Button("Carve mkey/ckey + mnemonic scraps")) {
+        app.carve_report =
+            breaker_carve(app.wallet_raw.empty() ? nullptr : app.wallet_raw.data(),
+                          app.wallet_raw.size(), app.has_wallet ? &app.wallet : nullptr);
+        app.has_carve = true;
+        app.log(app.carve_report.summary);
+      }
+      if (app.has_carve) {
+        ImGui::TextWrapped("%s", app.carve_report.summary.c_str());
+        if (app.carve_report.classic_core_has_no_bip39 && app.carve_report.mnemonics.empty()) {
+          ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.25f, 1.f),
+                             "BIP39 seed: NOT PRESENT (normal for classic Bitcoin Core wallet.dat)");
+        }
+        ImGui::Text("mkeys=%zu ckeys=%zu mnemonics=%zu", app.carve_report.mkeys.size(),
+                    app.carve_report.ckeys.size(), app.carve_report.mnemonics.size());
+        for (auto& m : app.carve_report.mnemonics) {
+          ImGui::Separator();
+          ImGui::Text("off=%zu words=%d bip39=%s", m.offset, m.word_count,
+                      m.bip39_checksum_ok ? "OK" : "no");
+          ImGui::TextWrapped("%s", m.note.c_str());
+          ImGui::TextWrapped("%s", m.text.c_str());
+        }
+      }
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("3 · Rebuild")) {
+      ImGui::TextWrapped(
+          "After master recovery: decrypt all keys, optionally re-encrypt mkey under a new "
+          "passphrase you choose, export WIF/hex/JSON. Not a scam fake-balance wallet.");
+      ImGui::InputText("Recovered master (64 hex)", app.recovered_master_hex,
+                       sizeof(app.recovered_master_hex));
+      ImGui::InputText("New passphrase (replace password)", app.rebuild_new_pass,
+                       sizeof(app.rebuild_new_pass), ImGuiInputTextFlags_Password);
+      ImGui::InputInt("New KDF iterations", &app.rebuild_iters);
+      ImGui::InputText("Export prefix", app.rebuild_out_prefix, sizeof(app.rebuild_out_prefix));
+      if (ImGui::Button("Rebuild package") && app.has_wallet) {
+        uint8_t master[32];
+        if (!hex_to_master32(app.recovered_master_hex, master)) {
+          app.log("[E] invalid master hex");
+        } else {
+          app.rebuild_pkg = breaker_rebuild(master, app.wallet, app.rebuild_new_pass,
+                                            (uint32_t)app.rebuild_iters, true);
+          app.has_rebuild = true;
+          if (breaker_write_package(app.rebuild_pkg, app.rebuild_out_prefix))
+            app.log("[+] wrote " + std::string(app.rebuild_out_prefix) + ".{json,txt}");
+          app.log(app.rebuild_pkg.message);
+        }
+      }
+      if (app.has_rebuild) {
+        ImGui::TextWrapped("%s", app.rebuild_pkg.message.c_str());
+        ImGui::TextWrapped("%s", app.rebuild_pkg.new_passphrase_note.c_str());
+        if (ImGui::Button("Copy JSON")) set_clipboard(app.rebuild_pkg.json_bundle);
+        ImGui::SameLine();
+        if (ImGui::Button("Copy TXT")) set_clipboard(app.rebuild_pkg.txt_bundle);
+        ImGui::BeginChild("reb", ImVec2(0, 0), true);
+        ImGui::TextUnformatted(app.rebuild_pkg.txt_bundle.c_str());
+        ImGui::EndChild();
+      }
+      ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
+  }
 }
 
 static void draw_results_tab(AppState& app) {
@@ -939,51 +1425,237 @@ static void draw_results_tab(AppState& app) {
 }
 
 static void draw_tools_tab(AppState& app) {
-  ImGui::TextUnformatted("Quick passphrase (method 0)");
-  ImGui::InputText("Passphrase", app.passphrase, sizeof(app.passphrase), ImGuiInputTextFlags_Password);
-  if (ImGui::Button("Try passphrase on mkey")) {
-    if (!app.has_wallet || !app.wallet.mkey.found) {
-      app.passphrase_result = "load wallet with structured mkey first";
-    } else {
-      auto r = try_wallet_passphrase(app.wallet.mkey, app.passphrase);
-      app.passphrase_result = r.message;
-      if (r.ok) {
-        app.passphrase_result += "\nkey=" + r.derived_key_hex + "\nmkey_plain=" + r.decrypted_mkey_hex;
-        app.log("[+] passphrase OK — master key decrypted");
-      } else {
-        app.log("[!] " + r.message);
+  ImGui::TextColored(ImVec4(0.9f, 0.55f, 0.35f, 1.f), "AUTHORIZED USE ONLY");
+  if (ImGui::BeginTabBar("tools_inner")) {
+    if (ImGui::BeginTabItem("Pass/WIF")) {
+      ImGui::TextUnformatted("Quick passphrase (method 0)");
+      ImGui::InputText("Passphrase", app.passphrase, sizeof(app.passphrase), ImGuiInputTextFlags_Password);
+      if (ImGui::Button("Try passphrase on mkey")) {
+        if (!app.has_wallet || !app.wallet.mkey.found) {
+          app.passphrase_result = "load wallet with structured mkey first";
+        } else {
+          auto r = try_wallet_passphrase(app.wallet.mkey, app.passphrase);
+          app.passphrase_result = r.message;
+          if (r.ok) {
+            app.passphrase_result +=
+                "\nkey=" + r.derived_key_hex + "\nmkey_plain=" + r.decrypted_mkey_hex;
+            app.log("[+] passphrase OK — master key decrypted");
+          } else {
+            app.log("[!] " + r.message);
+          }
+        }
       }
+      ImGui::TextWrapped("%s", app.passphrase_result.c_str());
+      ImGui::Separator();
+      ImGui::TextUnformatted("Verify WIF");
+      ImGui::InputText("WIF", app.wif_check, sizeof(app.wif_check));
+      if (ImGui::Button("Verify WIF")) {
+        std::string detail;
+        bool ok = verify_wif(app.wif_check, &detail);
+        app.wif_result = ok ? detail : ("FAIL — " + detail);
+      }
+      ImGui::TextWrapped("%s", app.wif_result.c_str());
+      ImGui::Separator();
+      if (ImGui::Button("Experiment: dual_fp")) {
+        std::string log;
+        experiment_dual_fp(&log, 5000);
+        app.log(log);
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Experiment: passphrase")) {
+        std::string log;
+        experiment_passphrase_selftest(&log);
+        app.log(log);
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Experiment: secp")) {
+        std::string log;
+        run_experiment("secp", &log);
+        app.log(log);
+      }
+      ImGui::EndTabItem();
     }
-  }
-  ImGui::TextWrapped("%s", app.passphrase_result.c_str());
-
-  ImGui::Separator();
-  ImGui::TextUnformatted("Verify WIF");
-  ImGui::InputText("WIF", app.wif_check, sizeof(app.wif_check));
-  if (ImGui::Button("Verify")) {
-    std::string detail;
-    bool ok = verify_wif(app.wif_check, &detail);
-    app.wif_result = ok ? detail : ("FAIL — " + detail);
-  }
-  ImGui::TextWrapped("%s", app.wif_result.c_str());
-
-  ImGui::Separator();
-  if (ImGui::Button("Experiment: dual_fp")) {
-    std::string log;
-    experiment_dual_fp(&log, 5000);
-    app.log(log);
-  }
-  ImGui::SameLine();
-  if (ImGui::Button("Experiment: passphrase")) {
-    std::string log;
-    experiment_passphrase_selftest(&log);
-    app.log(log);
-  }
-  ImGui::SameLine();
-  if (ImGui::Button("Experiment: secp")) {
-    std::string log;
-    run_experiment("secp", &log);
-    app.log(log);
+    if (ImGui::BeginTabItem("BIP39")) {
+      ImGui::InputTextMultiline("Mnemonic", app.bip39_mnemonic, sizeof(app.bip39_mnemonic),
+                               ImVec2(-1, 80));
+      if (ImGui::Button("Validate BIP39 checksum")) {
+        auto r = bip39_validate_mnemonic(app.bip39_mnemonic);
+        app.tools_panel_out = r.message;
+        if (!r.unknown_words.empty()) {
+          app.tools_panel_out += "\nunknown:";
+          for (auto& w : r.unknown_words) app.tools_panel_out += " " + w;
+        }
+        app.log("[bip39] " + r.message);
+      }
+      ImGui::TextWrapped("%s", app.tools_panel_out.c_str());
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Brainwallet")) {
+      ImGui::InputText("Passphrase → SHA256 → WIF", app.brain_pass, sizeof(app.brain_pass));
+      if (ImGui::Button("Derive")) {
+        auto r = brainwallet_sha256_to_wif(app.brain_pass);
+        app.tools_panel_out = r.message + "\npriv=" + r.priv_hex + "\nWIF_u=" + r.wif_uncompressed +
+                              "\nWIF_c=" + r.wif_compressed;
+      }
+      ImGui::TextWrapped("%s", app.tools_panel_out.c_str());
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Base58/Bech32")) {
+      ImGui::InputText("Hex payload", app.base58_hex, sizeof(app.base58_hex));
+      if (ImGui::Button("Base58 encode")) {
+        app.tools_panel_out = base58_encode_hex(app.base58_hex);
+        if (app.tools_panel_out.empty()) app.tools_panel_out = "(encode failed)";
+      }
+      ImGui::Separator();
+      ImGui::InputText("HRP", app.bech32_hrp, sizeof(app.bech32_hrp));
+      ImGui::InputInt("witver", &app.bech32_witver);
+      ImGui::InputText("witness program hex", app.bech32_prog_hex, sizeof(app.bech32_prog_hex));
+      if (ImGui::Button("Bech32 encode")) {
+        std::vector<uint8_t> prog;
+        std::string h = app.bech32_prog_hex;
+        for (size_t i = 0; i + 1 < h.size(); i += 2) {
+          auto nib = [](char c) {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+            return -1;
+          };
+          int a = nib(h[i]), b = nib(h[i + 1]);
+          if (a < 0 || b < 0) {
+            prog.clear();
+            break;
+          }
+          prog.push_back((uint8_t)((a << 4) | b));
+        }
+        app.tools_panel_out =
+            bech32_encode(app.bech32_hrp, app.bech32_witver, prog.data(), prog.size());
+        if (app.tools_panel_out.empty()) app.tools_panel_out = "(bech32 failed)";
+      }
+      ImGui::TextWrapped("%s", app.tools_panel_out.c_str());
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Hex/Entropy")) {
+      ImGui::InputText("File", app.hexdump_path, sizeof(app.hexdump_path));
+      ImGui::SameLine();
+      if (ImGui::Button("Browse##hex")) {
+        auto p = open_file_dialog("All\0*.*\0");
+        if (!p.empty()) strncpy(app.hexdump_path, p.c_str(), sizeof(app.hexdump_path) - 1);
+      }
+      if (ImGui::Button("Dump + entropy")) {
+        auto r = hex_dump_file(app.hexdump_path);
+        app.tools_panel_out = r.summary + "\n" + r.hex_dump;
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Dump loaded wallet") && !app.wallet_raw.empty()) {
+        auto r = hex_dump_entropy(app.wallet_raw.data(), app.wallet_raw.size());
+        app.tools_panel_out = r.summary + "\n" + r.hex_dump;
+      }
+      ImGui::BeginChild("hexout", ImVec2(0, 0), true, ImGuiWindowFlags_HorizontalScrollbar);
+      ImGui::TextUnformatted(app.tools_panel_out.c_str());
+      ImGui::EndChild();
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Diff")) {
+      ImGui::InputText("Wallet A", app.diff_path_a, sizeof(app.diff_path_a));
+      ImGui::SameLine();
+      if (ImGui::Button("Browse##da")) {
+        auto p = open_file_dialog();
+        if (!p.empty()) strncpy(app.diff_path_a, p.c_str(), sizeof(app.diff_path_a) - 1);
+      }
+      ImGui::InputText("Wallet B", app.diff_path_b, sizeof(app.diff_path_b));
+      ImGui::SameLine();
+      if (ImGui::Button("Browse##db")) {
+        auto p = open_file_dialog();
+        if (!p.empty()) strncpy(app.diff_path_b, p.c_str(), sizeof(app.diff_path_b) - 1);
+      }
+      if (ImGui::Button("Diff wallet.dat")) {
+        auto r = wallet_dat_diff(app.diff_path_a, app.diff_path_b);
+        app.tools_panel_out = r.report;
+      }
+      ImGui::TextWrapped("%s", app.tools_panel_out.c_str());
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Strings")) {
+      ImGui::InputText("Dump file", app.strings_path, sizeof(app.strings_path));
+      ImGui::SameLine();
+      if (ImGui::Button("Browse##str")) {
+        auto p = open_file_dialog("All\0*.*\0");
+        if (!p.empty()) strncpy(app.strings_path, p.c_str(), sizeof(app.strings_path) - 1);
+      }
+      if (ImGui::Button("Scavenge strings")) {
+        app.strings_hits = strings_scavenge_file(app.strings_path);
+        app.tools_panel_out = "hits=" + std::to_string(app.strings_hits.size());
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Scavenge loaded") && !app.wallet_raw.empty()) {
+        app.strings_hits = strings_scavenge(app.wallet_raw.data(), app.wallet_raw.size());
+        app.tools_panel_out = "hits=" + std::to_string(app.strings_hits.size());
+      }
+      ImGui::BeginChild("strout", ImVec2(0, 0), true);
+      for (auto& h : app.strings_hits)
+        ImGui::Text("%08zx  %s", h.offset, h.text.c_str());
+      ImGui::EndChild();
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Balance")) {
+      ImGui::Checkbox("Enable read-only HTTP (blockchain.info)", &app.balance_http);
+      ImGui::InputText("Address", app.balance_addr, sizeof(app.balance_addr));
+      if (app.has_wallet && app.selected_ckey >= 0 &&
+          app.selected_ckey < (int)app.wallet.ckeys.size()) {
+        if (ImGui::Button("Use selected ckey address")) {
+          strncpy(app.balance_addr, app.wallet.ckeys[app.selected_ckey].address.c_str(),
+                  sizeof(app.balance_addr) - 1);
+        }
+      }
+      if (ImGui::Button("Lookup")) {
+        auto r = address_balance_lookup(app.balance_addr, app.balance_http);
+        app.tools_panel_out = r.message + "\n" + r.raw_json;
+      }
+      ImGui::BeginChild("balout", ImVec2(0, 0), true);
+      ImGui::TextWrapped("%s", app.tools_panel_out.c_str());
+      ImGui::EndChild();
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Triage")) {
+      ImGui::TextWrapped("Multi-wallet folder triage sorted by iterations (low first).");
+      ImGui::InputText("Folder", app.triage_folder, sizeof(app.triage_folder));
+      ImGui::SameLine();
+      if (ImGui::Button("Browse##tri")) {
+        auto p = browse_folder_dialog();
+        if (!p.empty()) strncpy(app.triage_folder, p.c_str(), sizeof(app.triage_folder) - 1);
+      }
+      if (ImGui::Button("Triage *.dat")) {
+        app.triage_rows = multi_wallet_triage(app.triage_folder);
+        app.log("[+] triage " + std::to_string(app.triage_rows.size()) + " wallets");
+      }
+      if (ImGui::BeginTable("tri", 5,
+                            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
+                            ImVec2(0, 0))) {
+        ImGui::TableSetupColumn("Path");
+        ImGui::TableSetupColumn("Iters");
+        ImGui::TableSetupColumn("CKeys");
+        ImGui::TableSetupColumn("Size");
+        ImGui::TableSetupColumn("Note");
+        ImGui::TableHeadersRow();
+        for (auto& row : app.triage_rows) {
+          ImGui::TableNextRow();
+          ImGui::TableSetColumnIndex(0);
+          if (ImGui::Selectable(row.path.c_str(), false, ImGuiSelectableFlags_SpanAllColumns))
+            load_wallet_path(app, row.path);
+          ImGui::TableSetColumnIndex(1);
+          ImGui::Text("%u", row.iterations);
+          ImGui::TableSetColumnIndex(2);
+          ImGui::Text("%d", row.ckeys);
+          ImGui::TableSetColumnIndex(3);
+          ImGui::Text("%zu", row.size);
+          ImGui::TableSetColumnIndex(4);
+          ImGui::TextUnformatted(row.note.c_str());
+        }
+        ImGui::EndTable();
+      }
+      ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
   }
 }
 
@@ -1135,16 +1807,15 @@ static void draw_console(AppState& app) {
 }
 
 static void draw_lab_docs_tab(AppState& app) {
-  ImGui::TextColored(ImVec4(0.78f, 0.62f, 0.28f, 1.f), "TrueWalletCollider // Recovery Lab");
+  ImGui::TextColored(ImVec4(0.78f, 0.62f, 0.28f, 1.f), "TrueWalletCollider // Forensic Suite");
   ImGui::TextWrapped("%s", experiment_help().c_str());
   ImGui::Separator();
   ImGui::TextUnformatted("Workflow");
-  ImGui::BulletText("Extract: parse wallet.dat, archaeology flags, folder scan (low iter first).");
-  ImGui::BulletText("Passphrase Lab: KDF candidates + dual_verify_passphrase batch.");
-  ImGui::BulletText("Salvage: damaged BDB carve for orphan ckeys/mkeys.");
-  ImGui::BulletText("AES Partial: prefix-constrained GPU only — not full 2^256 brute.");
-  ImGui::BulletText("Hashcat Bridge: export $bitcoin$ -m 11300 for external wordlists.");
-  ImGui::BulletText("Results: multi-ckey decrypt after master recovery.");
+  ImGui::BulletText("Extract / Salvage / Passphrase Lab / AES Partial / dual-verify (core Recovery Lab).");
+  ImGui::BulletText("Verify: REAL/SUSPECT/FAKE/CORRUPT checklist (CLI --verify).");
+  ImGui::BulletText("Case: notes + evidence zip under cases/.");
+  ImGui::BulletText("BTCRecover Lab + Hashcat Bridge: local third_party bundles after setup_forensics.bat.");
+  ImGui::BulletText("Tools: BIP39, brainwallet, Base58/Bech32, hex/entropy, diff, strings, balance, triage.");
   ImGui::Separator();
   ImGui::TextUnformatted("Hibernation / RAM forensic guidance");
   ImGui::TextWrapped(
@@ -1171,7 +1842,7 @@ int RunGuiApp() {
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
   GLFWwindow* window =
-      glfwCreateWindow(1440, 900, "TrueWalletCollider — Recovery Lab", nullptr, nullptr);
+      glfwCreateWindow(1440, 900, "TrueWalletCollider — Forensic Suite", nullptr, nullptr);
   if (!window) {
     glfwTerminate();
     return 1;
@@ -1215,7 +1886,18 @@ int RunGuiApp() {
   AppState app;
   glfwSetWindowUserPointer(window, &app);
   app.devices = CrackEngine::list_devices();
-  app.log("TrueWalletCollider Recovery Lab ready — drop wallet.dat or Extract tab");
+  app.log("TrueWalletCollider Forensic Suite ready — Made by TrueScent");
+  app.log(cpu_simd_detect().status_line);
+  app.log("Bundles: run setup_forensics.bat for Hashcat + BTCRecover + John + Python");
+  app.log("Telegram: https://t.me/TrueScent — authorized use only");
+  app.case_ids = case_list_ids();
+  app.tools_status = detect_forensics_tools();
+  app.hashcat_exe_cached = app.tools_status.hashcat;
+  app.orch_opt.do_verify = true;
+  app.orch_opt.do_carve = true;
+  app.orch_opt.do_native_kdf = true;
+  app.orch_opt.use_cpu = true;
+  app.orch_opt.use_gpu = true;
   if (!app.devices.empty())
     app.log("CUDA: " + app.devices[0]);
   else
@@ -1237,6 +1919,7 @@ int RunGuiApp() {
                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
 
     draw_brand_bar(app);
+    draw_about_modal(app);
 
     if (app.drop_pulse > 0) {
       ImGui::TextColored(ImVec4(0.55f, 0.92f, 0.55f, (float)app.drop_pulse), "wallet dropped");
@@ -1261,6 +1944,22 @@ int RunGuiApp() {
       }
       if (ImGui::BeginTabItem("AES Partial")) {
         draw_aes_partial_tab(app);
+        ImGui::EndTabItem();
+      }
+      if (ImGui::BeginTabItem("Breaker & Rebuild")) {
+        draw_breaker_rebuild_tab(app);
+        ImGui::EndTabItem();
+      }
+      if (ImGui::BeginTabItem("Verify")) {
+        draw_verify_tab(app);
+        ImGui::EndTabItem();
+      }
+      if (ImGui::BeginTabItem("Case")) {
+        draw_case_tab(app);
+        ImGui::EndTabItem();
+      }
+      if (ImGui::BeginTabItem("BTCRecover Lab")) {
+        draw_btcrecover_lab_tab(app);
         ImGui::EndTabItem();
       }
       if (ImGui::BeginTabItem("Hashcat Bridge")) {

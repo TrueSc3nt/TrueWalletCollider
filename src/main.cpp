@@ -5,6 +5,8 @@
 #include "wallet/HashcatExport.h"
 #include "wallet/Experiment.h"
 #include "wallet/Salvage.h"
+#include "wallet/ForensicVerify.h"
+#include "wallet/ToolBridge.h"
 #include "crypto/crypto_wallet.h"
 #include "crypto/secp256k1_lite.h"
 
@@ -17,16 +19,20 @@
 
 static void usage() {
   std::printf(
-      "TrueWalletCollider — Recovery Lab (authorized owner recovery / cryptanalysis R&D)\n\n"
-      "  TrueWalletCollider.exe [flags]     launch Recovery Lab GUI\n"
+      "TrueWalletCollider — Forensic Suite / Recovery Lab\n"
+      "(authorized owner recovery / DFIR / cryptanalysis R&D only)\n\n"
+      "  TrueWalletCollider.exe [flags]     launch Forensic Suite GUI\n"
       "  --selftest                         GPU+host PoC AES/WIF pipeline\n"
       "  --parse FILE                       parse wallet.dat → TXT/JSON exports\n"
+      "  --verify FILE|$bitcoin$LINE        REAL/SUSPECT/FAKE/CORRUPT checklist\n"
       "  --export-hashcat FILE              print $bitcoin$ line (hashcat -m 11300)\n"
       "  --salvage FILE                     carve mkey/ckey from damaged dump\n"
       "  --experiment NAME                  research harness (help|dual_fp|passphrase|secp|hashcat_fmt)\n"
+      "  --tools-status                     show bundled Hashcat/BTCRecover/John/Python\n"
       "  --partial-help                     document AES partial-key GPU mode\n\n"
       "Honest scope: passphrase/KDF + dual-verify + salvage + partial AES key.\n"
-      "Raw full AES-256 search of unknown keys is research/partial-key only (2^256).\n");
+      "Raw full AES-256 search of unknown keys is research/partial-key only (2^256).\n"
+      "Optional bundles: run setup_forensics.bat → third_party\\{hashcat,python,btcrecover,john}\n");
 }
 
 int RunHeadlessCli(int argc, char** argv) {
@@ -50,6 +56,39 @@ int main(int argc, char** argv) {
           "  CLI (TrueMkeyCollider): --partial HEXPREFIX  (MODE_PARTIAL)\n"
           "  Does NOT claim a break of unknown full AES-256 master keys.\n");
       return 0;
+    }
+    if (a == "--tools-status") {
+      auto s = detect_forensics_tools();
+      std::fputs(s.status_text.c_str(), stdout);
+      return (s.hashcat.empty() && s.btcrecover.empty()) ? 2 : 0;
+    }
+    if (a == "--verify" && argc >= 3) {
+      std::string arg = argv[2];
+      VerifyReport r;
+      if (arg.rfind("$bitcoin$", 0) == 0)
+        r = verify_bitcoin_hash_line(arg);
+      else {
+        /* Join remaining args if hash line was split? Prefer file. */
+        std::ifstream f(arg, std::ios::binary);
+        if (f) {
+          r = verify_wallet_file(arg);
+        } else {
+          std::string joined = arg;
+          for (int i = 3; i < argc; ++i) {
+            joined += " ";
+            joined += argv[i];
+          }
+          if (joined.rfind("$bitcoin$", 0) == 0)
+            r = verify_bitcoin_hash_line(joined);
+          else
+            r = verify_mkey_ckey_text(joined);
+        }
+      }
+      std::fputs(verify_report_text(r).c_str(), stdout);
+      return r.verdict == VerifyVerdict::REAL      ? 0
+             : r.verdict == VerifyVerdict::SUSPECT ? 1
+             : r.verdict == VerifyVerdict::CORRUPT ? 2
+                                                   : 3;
     }
     if (a == "--experiment") {
       std::string name = argc >= 3 ? argv[2] : "help";

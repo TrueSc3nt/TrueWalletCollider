@@ -34,33 +34,39 @@ TrueWalletCollider/
   TrueWalletCollider.exe      # run this (portable; no installer)
   build_cuda.bat              # full rebuild
   rebuild_quick.bat           # incremental rebuild
-  setup_forensics.bat         # optional: fetch Hashcat into third_party/
+  setup_forensics.bat         # fetch Hashcat + Python + BTCRecover + John into third_party/
   README.md
   docs/
-  third_party/                # ImGui, GLFW, micro-ecc; Hashcat after setup
-  data/                       # sample text helpers (not live wallets)
+  third_party/                # ImGui, GLFW, micro-ecc; Hashcat/BTCRecover/John/Python after setup
+  data/                       # bip39_english.txt + sample text helpers (not live wallets)
+  cases/                      # created by Case tab (gitignored)
   cuda/                       # CUDA sources
   src/
 ```
 
 `.exe` is produced by `build_cuda.bat` / `rebuild_quick.bat`. Live `wallet.dat` files should stay outside the repo (gitignores `*.dat`).
 
-### 2.2 Optional Hashcat (for Hashcat Bridge spawn)
+### 2.2 Forensic tool bundles (Hashcat / BTCRecover / John)
 
-Hashcat Windows binaries are **large** and are **not** committed to git. To integrate them locally:
+Binaries are **large** and are **not** committed to git. Integrate locally:
 
 ```bat
 setup_forensics.bat
 ```
 
-This downloads the official Hashcat Windows release into `third_party\hashcat\` (when network is available). The GUI **Hashcat Bridge** looks for:
+After a successful run you should have:
 
-1. `third_party\hashcat\hashcat.exe` (relative to the process working directory)
-2. `hashcat.exe` / `hashcat` on **PATH**
+| Path | Used by |
+|------|---------|
+| `third_party\hashcat\hashcat.exe` | Hashcat Bridge (spawn + stream) |
+| `third_party\python\python.exe` | BTCRecover Lab |
+| `third_party\btcrecover\btcrecover.py` | BTCRecover Lab |
+| `third_party\john\run\john.exe` | Hashcat Bridge → John button |
+| `data\bip39_english.txt` | Tools → BIP39 |
 
-If neither is found, export still works — run Hashcat manually with the written hash file.
+CLI: `TrueWalletCollider.exe --tools-status`
 
-**John the Ripper / BTCRecover:** not bundled in this release. Export `$bitcoin$` / use `--export-hashcat` and feed external tools. John: `john --format=bitcoin hash.txt` (after bitcoin2john-style export).
+If downloads fail, place official builds at those paths and re-launch. Export of `$bitcoin$` always works without bundles.
 
 ### 2.3 CUDA (AES Partial + CUDA Crack)
 
@@ -68,7 +74,7 @@ If neither is found, export still works — run Hashcat manually with the writte
 - For **building**: CUDA Toolkit 12.x/13.x + VS C++  
 - For **running** a prebuilt `.exe`: Toolkit not required if the binary is already linked; still need a working CUDA driver stack for those tabs  
 
-Parse, salvage, Passphrase Lab, Hashcat export, and most Tools work **without** a GPU.
+Parse, salvage, Passphrase Lab, Verify, Case, Hashcat export, BTCRecover Lab (CPU), and most Tools work **without** a GPU.
 
 ### 2.4 Architecture note
 
@@ -83,12 +89,12 @@ cd C:\Users\loulo\Desktop\TrueWalletCollider
 TrueWalletCollider.exe
 ```
 
-Window title: **TrueWalletCollider — Recovery Lab**.
+Window title: **TrueWalletCollider — Forensic Suite** · Made by TrueScent.
 
-- **Left column tabs:** Extract · Salvage · Passphrase Lab · AES Partial · Hashcat Bridge · Results · Tools  
+- **Left column tabs:** Extract · Salvage · Passphrase Lab · AES Partial · **Breaker & Rebuild** · Verify · Case · BTCRecover Lab · Hashcat Bridge · Results · Tools  
 - **Right column tabs:** CUDA Crack · Console · Lab Docs  
 
-Console should log something like `Recovery Lab ready`. If a CUDA device is found it is named; otherwise `[!] no CUDA devices visible`.
+Brand bar shows **CPU: AVXx active (N KDF workers)** and a link to **https://t.me/TrueScent**. Console logs Forensic Suite ready + SIMD status.
 
 **Drag-and-drop:** drop a `.dat` onto the window to load it into Extract.
 
@@ -96,7 +102,7 @@ Console should log something like `Recovery Lab ready`. If a CUDA device is foun
 
 ## 4. Recommended case workflow (operator practice)
 
-There is no separate “Case” tab yet. Use a folder convention next to the suite:
+Use the **Case** tab (writes `cases/<id>/`) or a folder convention:
 
 ```
 cases\<matter_name>\
@@ -110,16 +116,17 @@ cases\<matter_name>\
 
 Suggested operator steps:
 
-1. Record operator ID, date, authority, and source of evidence in `chain_of_custody.txt`.
+1. Record operator ID, date, authority in Case notes / `chain_of_custody.txt`.
 2. Copy evidence into `evidence\` (never work solely on the only original).
 3. **Extract** → parse; note magic, iterations, archaeology flags.
-4. If damaged → **Salvage**.
-5. Forgotten password → **Passphrase Lab** and/or **Hashcat Bridge**.
-6. Partial key / cold-boot candidates → **AES Partial** / **CUDA Crack**.
-7. On hit → **Results** dual-verify + multi-ckey decrypt; copy `FOUND_WALLET.txt` offline.
-8. Secure erase local secrets (Results).
+4. **Verify** → REAL/SUSPECT/FAKE/CORRUPT checklist.
+5. If damaged → **Salvage** / Breaker → Carve.
+6. Forgotten password → **Breaker & Rebuild** orchestrator and/or Passphrase Lab / Hashcat / John / BTCRecover.
+7. Partial key / cold-boot candidates → **AES Partial** / CUDA Crack.
+8. On hit → **Breaker → Rebuild** (new passphrase + WIF/JSON) and/or **Results** dual-verify + multi-ckey decrypt.
+9. Secure erase local secrets (Results).
 
-SHA-256 evidence hashing can be done with built-in Windows tools, e.g. `certutil -hashfile evidence\wallet.dat SHA256`, and recorded in the case notes.
+SHA-256 evidence hashing: `certutil -hashfile evidence\wallet.dat SHA256`.
 
 ---
 
@@ -196,6 +203,18 @@ Hits update dual-verify state and recovered master hex for **Results**.
 Honesty banner in-tab: use Passphrase Lab / Hashcat Bridge for wallet **passwords**.
 
 CLI doc: `--partial-help`. TrueMkeyCollider CLI can run `--partial HEXPREFIX`.
+
+### 5.5b Breaker & Rebuild Lab (TrueScent)
+
+**Purpose:** One novel workflow — multi-strategy **Break**, honest **Carve**, owner **Rebuild**.
+
+| Sub-tab | Behavior |
+|---------|----------|
+| Break | Orchestrator checkboxes: Verify, Carve, Native KDF (parallel workers from SIMD tier), Hashcat 11300, John bitcoin, BTCRecover, CUDA partial hint; CPU/GPU toggles |
+| Carve | mkey/ckey carve + mnemonic-looking strings; shows **BIP39 NOT PRESENT** when classic Core has none |
+| Rebuild | Master hex + **new passphrase** → decrypt all keys, research mkey re-encrypt, write `rebuild_export.json/.txt` WIF/hex bundle |
+
+Honesty: Rebuild is owner rematerialization, not a fake-balance scam wallet.
 
 ### 5.5 Hashcat Bridge
 
@@ -400,9 +419,11 @@ Rebuild issues: see `build_cuda.bat` messages for missing `vcvars64` or CUDA Too
 1. **Passphrase recovery** is the primary practical path for encrypted Core wallets.  
 2. **Partial AES** is valid only with constrained unknown bytes (prefix/suffix/candidates).  
 3. **Random CUDA search** demonstrates capability and PoC — it is not a finishing strategy for unknown 256-bit keys.  
-4. **Hashcat Bridge** is interop, not a built-in Hashcat UI with live stdout in this version (spawn opens a separate console).  
-5. **BTCRecover / John / BIP39 labs** are not first-class GUI tabs in this build — use external tools with exported hashes where appropriate.  
-6. Hibernation / pagefile analysis is **guidance + import** of user-supplied material only.  
+4. **Hashcat Bridge** exports `$bitcoin$` and can spawn/stream local `hashcat.exe` / John after `setup_forensics.bat`.  
+5. **BTCRecover Lab** and **John** are first-class GUI bridges when bundles are installed.  
+6. **Classic Bitcoin Core wallet.dat has no BIP39 seed** — Breaker Carve says “NOT PRESENT” when none is found. Do not claim magic seed recovery.  
+7. **Rebuild** rematerializes owner keys under a new passphrase / WIF export — never ships fake balances.  
+8. Hibernation / pagefile analysis is **guidance + import** of user-supplied material only.  
 
 ---
 
@@ -420,4 +441,4 @@ Rebuild issues: see `build_cuda.bat` messages for missing `vcvars64` or CUDA Too
 
 ---
 
-*TrueScent — TrueWalletCollider Forensic Suite / Recovery Lab. Authorized recovery only.*
+*Made by TrueScent — TrueWalletCollider Forensic Suite. https://t.me/TrueScent — Authorized recovery only.*

@@ -1,49 +1,40 @@
 # TrueWalletCollider — Quick Start
 
+**Made by TrueScent** · https://t.me/TrueScent  
 Authorized owner / DFIR recovery only. Windows x64.
 
 ## 1. Open the suite
 
 ```bat
 cd %USERPROFILE%\Desktop\TrueWalletCollider
+setup_forensics.bat
 TrueWalletCollider.exe
 ```
 
-Optional Hashcat for Bridge spawn:
+Confirm brand bar shows `CPU: AVXx active` and tools via `--tools-status`.
 
-```bat
-setup_forensics.bat
-```
+## 2. Load / classify
 
-## 2. Load evidence
-
-- **Extract** → Open `wallet.dat`, or drag-and-drop a `.dat`  
-- Check **Magic** and **Archaeology flags**  
-- Damaged file → **Salvage**
+- **Extract** → Open `wallet.dat`
+- **Verify** → REAL / SUSPECT / FAKE / CORRUPT
+- **Case** → notes + evidence zip
+- Damaged → **Salvage** / Breaker → Carve
 
 ## 3. Recover
 
 | Situation | Go to |
 |-----------|--------|
-| Remember fragments of the password | **Passphrase Lab** |
-| Large wordlist / GPU dict attack | **Hashcat Bridge** → `-m 11300` |
-| Known AES key prefix / cold-boot hex keys | **AES Partial** |
-| Research AES search / try key / selftest | **CUDA Crack** |
+| Multi-strategy attack | **Breaker & Rebuild** → Break |
+| Password fragments | **Passphrase Lab** |
+| Tokenlist / BIP39 / Electrum | **BTCRecover Lab** |
+| GPU / large wordlist | **Hashcat Bridge** / John |
+| Known AES prefix | **AES Partial** |
+| Rematerialize + new password | **Breaker & Rebuild** → Rebuild |
 
 ## 4. Confirm & clean up
 
-1. **Results** → dual-verify OK (+ pubkey match when possible)  
-2. `decrypt_all_ckeys` / copy `FOUND_WALLET.txt` offline  
-3. Secure erase → wipe FOUND + hit log  
-
-## CLI cheatsheet
-
-```bat
-TrueWalletCollider.exe --parse wallet.dat
-TrueWalletCollider.exe --export-hashcat wallet.dat
-TrueWalletCollider.exe --salvage dump.bin
-TrueWalletCollider.exe --selftest
-TrueWalletCollider.exe --help
-```
+1. Dual-verify OK
+2. Rebuild export or `FOUND_WALLET.txt` offline
+3. Secure erase
 
 Full manual: [USER_GUIDE.md](USER_GUIDE.md)
