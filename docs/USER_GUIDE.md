@@ -1,11 +1,12 @@
 # TrueWalletCollider — Professional User Guide
 
 **Product:** TrueWalletCollider Forensic Suite / Recovery Lab  
+**Made by TrueScent** · Telegram: https://t.me/TrueScent  
 **Audience:** Authorized wallet owners, business recovery operators, DFIR analysts  
-**Platform:** Windows 10/11 x64 (CUDA optional; NVIDIA GPU for AES search tabs)  
+**Platform:** Windows 10/11 x64 (CUDA optional; NVIDIA GPU for AES Partial / CUDA Crack)  
 **Repo:** https://github.com/TrueSc3nt/TrueWalletCollider
 
-This guide matches the **current** GUI tabs and CLI flags. It does not describe planned panels that are not in the binary yet.
+This guide matches the **current** GUI tabs, CLI flags, `setup_forensics.bat` bundles, Breaker & Rebuild Lab, Verify, Case, Hashcat / John / BTCRecover bridges, and CPU SIMD status. It does not invent features.
 
 ---
 
@@ -15,118 +16,127 @@ This guide matches the **current** GUI tabs and CLI flags. It does not describe 
 |------|---------|
 | Authorized use only | Own wallets, business-owned assets, or DFIR under written authority |
 | No unauthorized access | Imaging or cracking other people’s wallets without authority is illegal |
-| Dual-verify before trust | PKCS padding alone can false-positive; use pubkey EC match when present |
+| Dual-verify before trust | PKCS padding alone can false-positive; prefer `pubkey_match` via secp256k1 |
 | No AES-256 miracle | Full unknown-key search space is **2^256**. GPU shows research rates; it does not “break” AES |
-| Evidence hygiene | Export, transfer offline, then wipe local FOUND/scratch files |
+| BIP39 often absent | Classic Bitcoin Core `wallet.dat` typically stores **no** BIP39 seed — Carve reports **NOT PRESENT** |
+| Evidence hygiene | Export offline, then wipe local FOUND / scratch files |
 
-In-app reminders: **Lab Docs** tab and **Results** secure-erase checklist.
+In-app reminders: brand bar, **Lab Docs**, **Results** secure-erase checklist, and AUTHORIZED banners on cracker / case tabs.
 
 ---
 
 ## 2. Installation / portable layout
 
-### 2.1 What you need on disk
-
-Typical folder after clone or release unpack:
+### 2.1 Disk layout
 
 ```
 TrueWalletCollider/
-  TrueWalletCollider.exe      # run this (portable; no installer)
-  build_cuda.bat              # full rebuild
+  TrueWalletCollider.exe      # portable GUI + CLI
+  setup_forensics.bat         # Hashcat + Python + BTCRecover + John → third_party/
+  build_cuda.bat              # full CUDA+GUI rebuild
   rebuild_quick.bat           # incremental rebuild
-  setup_forensics.bat         # fetch Hashcat + Python + BTCRecover + John into third_party/
   README.md
+  THIRD_PARTY_NOTICES.md
   docs/
-  third_party/                # ImGui, GLFW, micro-ecc; Hashcat/BTCRecover/John/Python after setup
-  data/                       # bip39_english.txt + sample text helpers (not live wallets)
+  data/                       # bip39_english.txt (setup may fetch)
   cases/                      # created by Case tab (gitignored)
-  cuda/                       # CUDA sources
+  third_party/                # imgui, glfw, micro-ecc; crackers after setup
+  cuda/
   src/
+  samples/
 ```
 
-`.exe` is produced by `build_cuda.bat` / `rebuild_quick.bat`. Live `wallet.dat` files should stay outside the repo (gitignores `*.dat`).
+Live `wallet.dat` files should stay outside the repo (gitignores `*.dat`).
 
-### 2.2 Forensic tool bundles (Hashcat / BTCRecover / John)
+### 2.2 Forensic bundles — `setup_forensics.bat`
 
-Binaries are **large** and are **not** committed to git. Integrate locally:
+Binaries are **large** and **not** committed to git. Integrate locally:
 
 ```bat
 setup_forensics.bat
 ```
 
-After a successful run you should have:
+Steps (1/4 … 4/4):
 
-| Path | Used by |
-|------|---------|
-| `third_party\hashcat\hashcat.exe` | Hashcat Bridge (spawn + stream) |
-| `third_party\python\python.exe` | BTCRecover Lab |
-| `third_party\btcrecover\btcrecover.py` | BTCRecover Lab |
-| `third_party\john\run\john.exe` | Hashcat Bridge → John button |
-| `data\bip39_english.txt` | Tools → BIP39 |
+1. **Hashcat** 6.2.6 → `third_party\hashcat\hashcat.exe`
+2. **Embeddable Python** 3.12 → `third_party\python\python.exe` (+ pip / BTCRecover requirements best-effort)
+3. **BTCRecover** → `third_party\btcrecover\btcrecover.py`
+4. **John jumbo** (win x64) → `third_party\john\run\john.exe` (or `john\john.exe`)
 
-CLI: `TrueWalletCollider.exe --tools-status`
+Also: fetches `data\bip39_english.txt` if missing; writes:
 
-If downloads fail, place official builds at those paths and re-launch. Export of `$bitcoin$` always works without bundles.
+| Artifact | Role |
+|----------|------|
+| `third_party\run_hashcat.bat` | Thin Hashcat launcher |
+| `third_party\run_btcrecover.bat` | Python + BTCRecover launcher |
+| `third_party\run_john.bat` | John launcher |
+| `third_party\FORENSICS_STATUS.txt` | HASHCAT/PYTHON/BTCRECOVER/JOHN OK\|MISSING |
 
-### 2.3 CUDA (AES Partial + CUDA Crack)
+CLI twin: `TrueWalletCollider.exe --tools-status`
 
-- NVIDIA GPU + recent driver  
-- For **building**: CUDA Toolkit 12.x/13.x + VS C++  
-- For **running** a prebuilt `.exe`: Toolkit not required if the binary is already linked; still need a working CUDA driver stack for those tabs  
+If downloads fail (no 7-Zip for `.7z`, network block, etc.), place official builds at the paths above and re-launch. **`$bitcoin$` export always works without bundles.**
 
-Parse, salvage, Passphrase Lab, Verify, Case, Hashcat export, BTCRecover Lab (CPU), and most Tools work **without** a GPU.
+### 2.3 CUDA
 
-### 2.4 Architecture note
+- **Running** AES Partial / CUDA Crack: NVIDIA GPU + working CUDA driver stack  
+- **Building**: CUDA Toolkit 12.x/13.x + VS C++ + CMake (`build_cuda.bat`)  
+- **CPU-only workflows**: Extract, Salvage, Passphrase Lab, Verify, Case, Hashcat export, John/BTCRecover (CPU), Tools (except GPU-dependent paths)
 
-Target: **Windows x64**. On unsupported architectures expect clear CUDA/device errors; the suite is not shipped for ARM/x86 as first-class.
+### 2.4 Architecture
+
+Target: **Windows x64**. Brand bar shows runtime SIMD: `CPU: SSE2|AVX|AVX2|AVX-512 active (N KDF workers)`. That worker count drives Breaker orchestrator **Native KDF** parallelism.
 
 ---
 
 ## 3. First launch
 
 ```bat
-cd C:\Users\loulo\Desktop\TrueWalletCollider
+cd C:\Users\YourName\Desktop\TrueWalletCollider
 TrueWalletCollider.exe
 ```
 
-Window title: **TrueWalletCollider — Forensic Suite** · Made by TrueScent.
+Window: **TrueWalletCollider — Forensic Suite** · Made by TrueScent.
 
-- **Left column tabs:** Extract · Salvage · Passphrase Lab · AES Partial · **Breaker & Rebuild** · Verify · Case · BTCRecover Lab · Hashcat Bridge · Results · Tools  
-- **Right column tabs:** CUDA Crack · Console · Lab Docs  
+### Layout
 
-Brand bar shows **CPU: AVXx active (N KDF workers)** and a link to **https://t.me/TrueScent**. Console logs Forensic Suite ready + SIMD status.
+| Column | Tabs (left → right order) |
+|--------|---------------------------|
+| **Left** | Extract · Salvage · Passphrase Lab · AES Partial · **Breaker & Rebuild** · Verify · Case · BTCRecover Lab · Hashcat Bridge · Results · Tools |
+| **Right** | CUDA Crack · Console · Lab Docs |
 
-**Drag-and-drop:** drop a `.dat` onto the window to load it into Extract.
+Brand bar: product name, Forensic Suite subtitle, TrueScent credit, SIMD status line, Telegram link **https://t.me/TrueScent**.
+
+**Drag-and-drop:** drop a `.dat` onto the window → loads into Extract.
 
 ---
 
-## 4. Recommended case workflow (operator practice)
+## 4. Recommended case workflow
 
-Use the **Case** tab (writes `cases/<id>/`) or a folder convention:
+Use the **Case** tab (`cases/<id>/`) or manual folders:
 
 ```
 cases\<matter_name>\
-  evidence\          # original wallet.dat / dumps (read-only copies)
-  hashes\            # wallet_hash.txt exports
-  dicts\             # wordlists
-  jobs\              # notes / hashcat command lines
-  results\           # FOUND_WALLET copies, reports
+  evidence\     # read-only copies of wallet.dat / dumps
+  hashes\       # wallet_hash.txt
+  dicts\        # wordlists / tokenlists
+  jobs\         # command notes
+  results\      # FOUND / rebuild exports
   chain_of_custody.txt
 ```
 
-Suggested operator steps:
+Operator steps:
 
-1. Record operator ID, date, authority in Case notes / `chain_of_custody.txt`.
-2. Copy evidence into `evidence\` (never work solely on the only original).
-3. **Extract** → parse; note magic, iterations, archaeology flags.
-4. **Verify** → REAL/SUSPECT/FAKE/CORRUPT checklist.
-5. If damaged → **Salvage** / Breaker → Carve.
-6. Forgotten password → **Breaker & Rebuild** orchestrator and/or Passphrase Lab / Hashcat / John / BTCRecover.
-7. Partial key / cold-boot candidates → **AES Partial** / CUDA Crack.
-8. On hit → **Breaker → Rebuild** (new passphrase + WIF/JSON) and/or **Results** dual-verify + multi-ckey decrypt.
-9. Secure erase local secrets (Results).
+1. Case → Create case (title + operator); record authority in notes.  
+2. Copy evidence; never modify the sole original.  
+3. **Extract** → parse; note magic, iterations, archaeology.  
+4. **Verify** → REAL / SUSPECT / FAKE / CORRUPT.  
+5. Damaged → **Salvage** and/or Breaker → **Carve**.  
+6. Forgotten password → Breaker **Break** and/or Passphrase Lab / Hashcat / John / BTCRecover.  
+7. Partial key / cold-boot → **AES Partial** / CUDA Crack.  
+8. Hit → Breaker **Rebuild** and/or Results dual-verify + `decrypt_all_ckeys`.  
+9. Offline backup → Results secure erase.
 
-SHA-256 evidence hashing: `certutil -hashfile evidence\wallet.dat SHA256`.
+Evidence hash: `certutil -hashfile evidence\wallet.dat SHA256`.
 
 ---
 
@@ -134,44 +144,36 @@ SHA-256 evidence hashing: `certutil -hashfile evidence\wallet.dat SHA256`.
 
 ### 5.1 Extract
 
-**Purpose:** Parse a Bitcoin Core–style `wallet.dat`, review integrity signals, export structured data, triage many wallets by iteration count.
+**Purpose:** Parse Bitcoin Core–style `wallet.dat`, review integrity signals, export, triage by iterations.
 
 | Control / area | Behavior |
 |----------------|----------|
 | Open wallet.dat | File picker |
-| Load PoC targets | Loads built-in crackBTCwallet-style research targets |
-| Folder scan mode | Scan a directory for `*.dat`, sort low-iter first; load selected |
-| File / Size / Magic | `Magic: OK` or `BAD` plus BDB note text |
-| Archaeology flags | Severity-colored table (unencrypted keys, multi-mkey, plaintext scraps, low-iter, etc.) |
-| Master key | Offset, encrypted48, salt, IV, CT, method, iterations, target_mkey; copy buttons |
-| CKeys | List + detail (address, enc, pubkey); copy |
-| Metadata | Tag / offset / note table |
-| Export TXT / JSON / ckeys | Writes analysis; `ckeys_export.txt` / `mkeys_export.txt` |
+| Load PoC targets | Built-in research targets |
+| Folder scan mode | Scan `*.dat`, sort **low-iter first**; load selected row |
+| File / Size / Magic | `Magic: OK` or `BAD` + BDB note |
+| Archaeology | Severity-colored flags (unencrypted keys, multi-mkey, plaintext scraps, low-iter, …) |
+| Master key | Offset, encrypted48, salt, IV, CT, method, iterations, target_mkey; copy |
+| CKeys | List + address / enc / pubkey; copy |
+| Metadata | Tag / offset / note |
+| Export TXT / JSON / ckeys | Analysis exports; `ckeys_export.txt` / `mkeys_export.txt` |
 
-**Authenticity signals available today (not a separate Verify tab):**
-
-- BDB **magic** OK vs BAD  
-- Parser notes (`bdb_note`)  
-- Archaeology severity flags and counts (`mkeys`, `unencrypted_keys`, `plaintext_scraps`)  
-- Structured mkey fields: 48-byte encrypted blob (96 hex), salt/iter/method  
-- Ckey pubkey lengths (compressed 33 / uncompressed 65 typical) and 96-hex ciphertext  
-
-Treat odd combinations (bad magic + “perfect” mkey, impossible sizes, garbage hex) as **suspect** until dual-verify against known behavior. A dedicated REAL/FAKE verdict panel is not in the current GUI.
+Also use **Verify** for an explicit REAL/FAKE/CORRUPT verdict (not only archaeology).
 
 ### 5.2 Salvage
 
-**Purpose:** Carve candidates from damaged Berkeley DB or raw dumps.
+**Purpose:** Carve candidates from damaged BDB or raw dumps.
 
 | Control | Behavior |
 |---------|----------|
-| Import path + Browse | Path to dump / image fragment |
+| Import path + Browse | Dump / image fragment |
 | salvage_file | File-oriented salvage |
 | salvage_carve (raw bytes) | Byte-buffer carve |
 | Heatmap | ASCII intensity by offset |
-| Ranked ckeys table | Score + note / address |
-| Export salvage TXT/JSON | Write report |
+| Ranked ckeys | Score + note / address |
+| Export salvage TXT/JSON | Report files |
 
-CLI twin: `--salvage FILE`.
+CLI: `--salvage FILE`.
 
 ### 5.3 Passphrase Lab
 
@@ -179,16 +181,16 @@ CLI twin: `--salvage FILE`.
 
 | Control | Behavior |
 |---------|----------|
-| Single passphrase + Try single | `dual_verify_passphrase` once |
-| Dictionary file | Load wordlist (cap ~500k in GUI batch gen) |
+| Single passphrase + Try single | One `dual_verify_passphrase` |
+| Dictionary file | Wordlist (GUI batch capped ~500k candidates when generating) |
 | Simple mask | `?d` digit, `?l` lower, `?u` upper, `?s` symbol (e.g. `Pass?d?d?d`) |
-| Recall token interview | Known words, prefixes/suffixes, keyboard walks, case, leet, years |
-| Generate candidates | Merge dict + mask + recall + optional single |
-| Measure H/s | Host KDF throughput estimate |
-| Run batch dual_verify_passphrase | Background thread; progress bar; Stop |
-| ETA line | Based on iters × candidates ÷ measured H/s |
+| Recall token interview | Fragments, prefixes/suffixes, keyboard walks, case, leet, years |
+| Generate candidates | Merge sources |
+| Measure H/s | Host KDF throughput |
+| Run batch dual_verify | Background thread + progress; Stop |
+| ETA | iters × candidates ÷ measured H/s |
 
-Hits update dual-verify state and recovered master hex for **Results**.
+Hits populate Results dual-verify / recovered master hex. Candidates can feed Breaker orchestrator when present.
 
 ### 5.4 AES Partial
 
@@ -197,156 +199,248 @@ Hits update dual-verify state and recovered master hex for **Results**.
 | Control | Behavior |
 |---------|----------|
 | Hex prefix | Even length, 1..31 bytes → CUDA `MODE_PARTIAL` |
-| Start PARTIAL CUDA | Needs loaded wallet/targets + CUDA device |
+| Start PARTIAL CUDA | Needs wallet/targets + CUDA device |
 | Cold-boot keys box | One 64-hex AES key per line; **Try all** on host |
 
-Honesty banner in-tab: use Passphrase Lab / Hashcat Bridge for wallet **passwords**.
+In-tab honesty: passwords → Passphrase Lab / Hashcat / John / BTCRecover, not raw AES fantasy.
 
-CLI doc: `--partial-help`. TrueMkeyCollider CLI can run `--partial HEXPREFIX`.
+CLI doc: `--partial-help`. Sibling CLI: TrueMkeyCollider `--partial HEXPREFIX`.
 
-### 5.5b Breaker & Rebuild Lab (TrueScent)
+### 5.5 Breaker & Rebuild Lab (TrueScent)
 
-**Purpose:** One novel workflow — multi-strategy **Break**, honest **Carve**, owner **Rebuild**.
+Title in UI: **TrueScent Wallet Breaker / Rebuild Lab**.
 
-| Sub-tab | Behavior |
-|---------|----------|
-| Break | Orchestrator checkboxes: Verify, Carve, Native KDF (parallel workers from SIMD tier), Hashcat 11300, John bitcoin, BTCRecover, CUDA partial hint; CPU/GPU toggles |
-| Carve | mkey/ckey carve + mnemonic-looking strings; shows **BIP39 NOT PRESENT** when classic Core has none |
-| Rebuild | Master hex + **new passphrase** → decrypt all keys, research mkey re-encrypt, write `rebuild_export.json/.txt` WIF/hex bundle |
+Sub-tabs:
 
-Honesty: Rebuild is owner rematerialization, not a fake-balance scam wallet.
+#### 1 · Break (orchestrator)
 
-### 5.5 Hashcat Bridge
+Checkboxes:
 
-**Purpose:** bitcoin2john-style export and optional Hashcat launch.
+| Option | Role |
+|--------|------|
+| Verify REAL/FAKE | Run forensic verify checklist |
+| Carve | mkey/ckey + mnemonic scrap carve |
+| Native KDF (CPU) | Parallel passphrase tries (worker count from SIMD status) |
+| Hashcat -m 11300 | Spawn / stream Hashcat on exported `$bitcoin$` |
+| John bitcoin | John `--format=bitcoin` |
+| BTCRecover | Spawn BTCRecover with dict/tokenlist |
+| CUDA partial hint | Prefer partial prefix path when set |
+| Use CPU / Use GPU | Strategy gating |
+
+Inputs: Dictionary / passwordlist, BTCRecover tokenlist, Partial AES prefix, Max native tries.  
+**RUN ORCHESTRATOR** requires a loaded wallet. Pulls Passphrase Lab candidates / single passphrase when available. Log + step bullets show what ran and any hit (fills recovered master + dual-verify).
+
+#### 2 · Carve
+
+**Carve mkey/ckey + mnemonic scraps** over raw bytes (± parsed wallet).
+
+- Counts: mkeys / ckeys / mnemonics  
+- If classic Core-style and no BIP39 hits: banner **BIP39 seed: NOT PRESENT (normal for classic Bitcoin Core wallet.dat)**  
+- Mnemonic hits show offset, word count, bip39 checksum OK/no, note, text  
+
+Honesty: does **not** invent seeds for wallets that never stored one.
+
+#### 3 · Rebuild
+
+After master recovery (orchestrator, lab, or paste):
+
+| Field | Meaning |
+|-------|---------|
+| Recovered master (64 hex) | AES master key |
+| New passphrase | Password **you** choose for rematerialized mkey |
+| New KDF iterations | Default suitable for method-0 style research re-encrypt |
+| Export prefix | Writes `prefix.json` + `prefix.txt` |
+
+**Rebuild package:** decrypt all keys → optional research mkey re-encrypt under new passphrase → WIF uncompressed/compressed + hex + JSON/TXT bundles. Copy JSON / Copy TXT.  
+Explicitly: **not** a fake-balance scam wallet.
+
+### 5.6 Verify
+
+**Purpose:** Classify evidence as **REAL / SUSPECT / FAKE / CORRUPT**.
 
 | Control | Behavior |
 |---------|----------|
-| `$bitcoin$` display | Extended line when first ckey+pubkey available |
-| Copy / Write hash file | Default `wallet_hash.txt` |
-| hashcat path status | Shows discovered exe or `(not found on PATH)` |
-| Wordlist + Spawn hashcat -m 11300 | `CreateProcess` new console if exe found |
+| Path or `$bitcoin$` / paste | File path, hash line, or mkey/ckey text |
+| Browse wallet.dat | Picker |
+| Verify loaded wallet | Checklist on current parse |
+| Run verify | Auto-detects file vs `$bitcoin$` vs text |
+| Verdict + table | Check / Pass / Detail |
+| Copy report | Clipboard full text |
 
-Manual examples shown in-tab:
+CLI: `--verify FILE` or `--verify "$bitcoin$..."`  
+Exit codes: REAL `0`, SUSPECT `1`, CORRUPT `2`, FAKE `3`.
+
+### 5.7 Case
+
+**Purpose:** Evidence hygiene under `cases/<id>/`.
+
+| Control | Behavior |
+|---------|----------|
+| Title / Operator | Case metadata |
+| Create case | Allocates id, optional evidence path from loaded wallet |
+| Open case combo | Load existing ids |
+| Note + Append note | Timestamped notes |
+| Add loaded wallet as artifact | Copy into case folder |
+| Export evidence zip | PowerShell `Compress-Archive` to path |
+| Summary child | Live case text |
+
+### 5.8 BTCRecover Lab
+
+Requires `setup_forensics.bat` (Python + BTCRecover). Shows MISSING paths until installed.
+
+| Control | Behavior |
+|---------|----------|
+| Show --help (stream) | Streamed help into panel |
+| wallet.dat / tokenlist / passwordlist | Browse + paths |
+| BIP39 mode / Electrum / seedrecover.py | Mode toggles |
+| Typos + typo max | Typo attack |
+| mnemonic (optional) | For seedrecover-style paths |
+| Extra CLI args | Passthrough |
+| Build cmdline (copy) | Clipboard full command |
+| Launch + stream / Stop | Background process + live output |
+
+Authorized-use banner in-tab. BIP39 modes apply to **wallets/seeds that actually use BIP39** — not “magic Core seed unlock.”
+
+### 5.9 Hashcat Bridge
+
+| Control | Behavior |
+|---------|----------|
+| Tools status + Rescan | Hashcat / Python / BTCRecover / John paths |
+| `$bitcoin$` line | Extended when first ckey+pubkey available |
+| Copy / Write hash file | Default `wallet_hash.txt` |
+| Wordlist | Optional `-a 0` list |
+| Spawn hashcat (new console) | Detached console |
+| Spawn + stream / Stop | Live output child |
+| Spawn john --format=bitcoin | John on hash file |
+| John + stream | Streamed John |
+
+Manual reminder in-tab:
 
 ```text
 hashcat -m 11300 -a 0 wallet_hash.txt wordlist.txt
-John: bitcoin2john wallet.dat > hash.txt
 ```
 
-CLI: `--export-hashcat FILE`, and `--parse` also writes `wallet_hashcat.txt` when possible.
+CLI: `--export-hashcat FILE`; `--parse` may also write `wallet_hashcat.txt`.
 
-### 5.6 Results
+### 5.10 Results
 
 | Control | Behavior |
 |---------|----------|
 | FOUND_WALLET path | Default `FOUND_WALLET.txt`; open location |
 | Last dual verify | OK/FAIL, PKCS flags, pubkey_match, master hex |
-| Recovered master (64 hex) + decrypt_all_ckeys | Multi-ckey decrypt report + WIF export path via FOUND |
+| Recovered master + decrypt_all_ckeys | Multi-ckey decrypt report + WIF via FOUND path |
 | Secure-erase checklist | Operator bullets |
-| Wipe FOUND + hit log | Checkbox + **Run secure erase** (zero overwrite) |
+| Wipe FOUND + hit log | Zero overwrite + **Run secure erase** |
 
-### 5.7 Tools
+### 5.11 Tools (inner tab bar)
+
+| Inner tab | Behavior |
+|-----------|----------|
+| **Pass/WIF** | Quick method-0 passphrase try; Verify WIF; Experiments (`dual_fp`, `passphrase`, `secp` → Console) |
+| **BIP39** | Validate / inspect phrases using `data/bip39_english.txt` |
+| **Brainwallet** | Phrase → key material helpers |
+| **Base58/Bech32** | Encode/decode utilities |
+| **Hex/Entropy** | Hex helpers + entropy notes |
+| **Diff** | Compare two wallet.dat paths |
+| **Strings** | Extract readable strings from loaded file / path |
+| **Balance** | Optional HTTP balance lookup for addresses (operator-initiated) |
+| **Triage** | Multi-wallet folder scan sorted by iterations (low first) |
+
+All Tools panels show AUTHORIZED USE ONLY where applicable.
+
+### 5.12 CUDA Crack (right column)
 
 | Control | Behavior |
 |---------|----------|
-| Quick passphrase | Method-0 try (message / derived key hex) without full lab batch |
-| Verify WIF | Checksum / decode detail |
-| Experiments | Buttons for `dual_fp`, `passphrase`, `secp` (log to Console) |
-
-### 5.8 CUDA Crack (right column)
-
-| Control | Behavior |
-|---------|----------|
-| CUDA device combo | From `CrackEngine::list_devices()` |
+| CUDA device | From `CrackEngine::list_devices()` |
 | Include mkey / ckeys | Target selection |
-| Mode | Random (`-r`), Sequential (`-q`), Mixed (`-rs`) |
+| Mode | Random, Sequential, Mixed |
 | Blocks / Threads / Streams / Mixed span / VRAM | Grid + memory hints |
 | Seq start / FOUND / Hit log paths | Files |
-| Try AES key (64 hex) | Host decrypt attempt |
-| Selftest | PoC pipeline |
-| START / STOP | Live keys, rate, peak, HIT + WIF copy |
+| Try AES key (64 hex) | Host decrypt |
+| Selftest | PoC AES/WIF pipeline |
+| START / STOP | Keys, rate, peak, HIT + WIF copy |
 
-### 5.9 Console
+Honest scope: constrained research / partial windows — not finishing unknown 256-bit keys.
 
-Clear / Copy all log lines. Primary feedback channel for loads, salvage, cracks, experiments.
+### 5.13 Console
 
-### 5.10 Lab Docs
+Clear / Copy all. Primary feedback for load, salvage, cracks, orchestrator, experiments.
 
-In-app summary of experiment help, recommended workflow bullets, hibernation/RAM guidance (**import only**, authorized), and secure-erase reminder.
+### 5.14 Lab Docs
+
+In-app: experiment help, recommended workflow, hibernation/RAM guidance (**import only**, authorized), secure-erase reminder.
 
 ---
 
-## 6. wallet.dat extract, salvage, and “is this real?”
+## 6. wallet.dat — extract, salvage, verify
 
 ### 6.1 Healthy path
 
-1. Extract → Open / drop `wallet.dat`.  
-2. Confirm **Magic: OK**, readable mkey (method, iterations, salt, 96-hex enc), ckeys with addresses/pubkeys.  
-3. Read archaeology: low severity is normal for encrypted Core wallets; high severity (plaintext keys, scraps) needs extra care.  
-4. Export JSON/TXT into your case `results\` folder.
+1. Extract → Open / drop `.dat`.  
+2. Confirm Magic OK, readable mkey (method, iters, salt, 96-hex enc), ckeys.  
+3. Read archaeology; then **Verify** for an explicit verdict.  
+4. Export JSON/TXT into case `results\`.
 
-### 6.2 Damaged / corrupt path
+### 6.2 Damaged path
 
-1. Salvage → point at dump → `salvage_file` or `salvage_carve`.  
-2. Review heatmap and ranked ckeys.  
-3. Export salvage report; promote best candidates into Passphrase Lab / CUDA only if structure looks coherent.
+1. Salvage and/or Breaker Carve.  
+2. Review heatmap / ranked ckeys / carve summary.  
+3. Promote coherent mkey fields into Passphrase Lab / Hashcat export.
 
-### 6.3 Integrity checklist (manual)
+### 6.3 Integrity checklist
 
 | Check | Expectation |
 |-------|-------------|
-| File size | Non-trivial; empty/tiny files suspect |
-| Magic | OK for BDB wallet.dat; BAD → salvage or wrong file |
-| mkey enc length | 96 hex (48 bytes) typical |
-| salt / iters | Present; extreme iters → slower KDF / triage |
+| Size | Non-trivial |
+| Magic | OK for BDB; BAD → salvage / wrong file |
+| mkey enc | 96 hex (48 bytes) typical |
+| salt / iters | Present; high iters → slower KDF |
 | ckey enc | 96 hex typical |
 | pubkey | 33 or 65 bytes hex typical |
-| Address | Derives when pubkey present |
-| Dual-verify after candidate | Must pass before operational use |
+| Dual-verify | Must pass before operational use |
 
 ---
 
-## 7. Passphrase Lab, Hashcat jobs, dual-verify
+## 7. Passphrase, Hashcat, John, BTCRecover, dual-verify
 
 ### 7.1 Passphrase Lab first
 
-Best when you remember fragments of the password. Build recall tokens → Generate → Measure H/s → batch.
+Best when you remember fragments. Recall → Generate → Measure H/s → batch. Or let Breaker **Native KDF** consume the same candidates.
 
-### 7.2 Hashcat Bridge for large wordlists
+### 7.2 Hashcat / John
 
-1. Write hash file from Bridge (or `--export-hashcat`).  
-2. Run `setup_forensics.bat` if you want local Hashcat.  
-3. Spawn from GUI **or**:
+1. Write hash from Hashcat Bridge (or `--export-hashcat`).  
+2. `setup_forensics.bat` if spawning locally.  
+3. Stream from GUI **or**:
 
 ```bat
-hashcat -m 11300 -a 0 cases\matter\hashes\wallet_hash.txt cases\matter\dicts\rockyou.txt
+third_party\run_hashcat.bat -m 11300 -a 0 wallet_hash.txt wordlist.txt
+third_party\run_john.bat --format=bitcoin wallet_hash.txt
 ```
 
-4. When Hashcat reports a password, paste it into Passphrase Lab **Try single** to dual-verify and populate Results.
+4. Paste cracked password into Passphrase Lab **Try single** to dual-verify.
 
-### 7.3 Dual-verify meaning
+### 7.3 BTCRecover
 
-On success the engine decrypts mkey/ckey material and, when possible, checks that the recovered private key matches the stored **pubkey** via secp256k1 (micro-ecc). Prefer hits with `pubkey_match` over PKCS-only.
+Use for tokenlists, typos, Electrum/BIP39 **when the wallet format matches**. Do not expect BIP39 recovery from classic Core-only files.
+
+### 7.4 Dual-verify
+
+Success decrypts mkey/ckey material and, when possible, checks recovered private key against stored **pubkey** (micro-ecc secp256k1). Prefer `pubkey_match` over PKCS-only.
 
 ---
 
-## 8. AES partial / CUDA crack / FOUND_WALLET
+## 8. AES partial / CUDA / FOUND_WALLET
 
 | Scenario | Tab | Mode |
 |----------|-----|------|
 | Known prefix from dump | AES Partial | `MODE_PARTIAL` |
-| Candidate full keys from cold-boot | AES Partial | Try all cold-boot keys |
-| Constrained research search | CUDA Crack | Mixed / sequential window |
-| Random rate experiment | CUDA Crack | Random (honest: will not finish 2^256) |
+| Cold-boot full keys | AES Partial | Try all |
+| Constrained research window | CUDA Crack | Mixed / sequential |
+| Random rate experiment | CUDA Crack | Random (will not finish 2^256) |
 
-On HIT:
-
-- AES key and WIF shown in CUDA Crack status  
-- Written to `FOUND_WALLET.txt` (path configurable)  
-- Dual-verify runs in the crack pipeline when wallet targets carry pubkeys  
-
-Never leave FOUND files on shared disks after the case closes — use Results wipe.
+On HIT: key + WIF in CUDA panel; `FOUND_WALLET.txt`; dual-verify when pubkeys present. Wipe via Results after case close.
 
 ---
 
@@ -354,20 +448,19 @@ Never leave FOUND files on shared disks after the case closes — use Results wi
 
 | Flag | Action |
 |------|--------|
-| *(no args)* | Launch Recovery Lab GUI |
+| *(no args)* | Launch Forensic Suite GUI |
 | `-h` / `--help` | Usage |
-| `--selftest` | GPU+host PoC AES/WIF; then passphrase + secp experiments. Options: `-d N`, `--found FILE` |
-| `--parse FILE` | Parse → stdout TXT; write `FILE.twc.txt`, `FILE.twc.json`, `ckeys_export.txt`, `mkeys_export.txt`, optional `wallet_hashcat.txt` |
-| `--export-hashcat FILE` | Print `$bitcoin$` line (extended when possible) |
-| `--salvage FILE` | Carve; write `FILE.salvage.txt` / `.json` |
+| `--tools-status` | Print Hashcat / Python / BTCRecover / John detection |
+| `--verify FILE\|$bitcoin$…` | REAL/SUSPECT/FAKE/CORRUPT report |
+| `--parse FILE` | TXT/JSON exports + optional `wallet_hashcat.txt` |
+| `--export-hashcat FILE` | Print `$bitcoin$` (`-m 11300`) |
+| `--salvage FILE` | Carve reports `.salvage.txt` / `.json` |
+| `--selftest` | GPU+host PoC; then passphrase + secp experiments (`-d N`, `--found FILE`) |
 | `--experiment NAME` | `help` \| `dual_fp` \| `passphrase` \| `secp` \| `hashcat_fmt` |
 | `--partial-help` | Document partial AES GPU mode |
-| `--no-gui` | Prints usage (placeholder; use real flags above) |
-| `--cmd doublesha256 <hex>` | Double-SHA256 helper |
-| `--cmd aesdecrypt <iv> <key> <enc>` | AES decrypt helper |
-| `--cmd privatekeytowif <priv>` | WIF from private key |
+| `--no-gui` | Prints usage (placeholder) |
 
-Exit codes: success typically `0`; parse/salvage may return `2` when no useful material found.
+Exit codes: success typically `0`; parse/salvage may return `2` with no useful material; `--verify` uses verdict codes above; `--tools-status` may return `2` if both Hashcat and BTCRecover missing.
 
 ---
 
@@ -375,24 +468,28 @@ Exit codes: success typically `0`; parse/salvage may return `2` when no useful m
 
 ### A. Forgotten passphrase (healthy wallet.dat)
 
-1. Extract → load wallet → note iterations.  
-2. Passphrase Lab → recall words + years + case/leet → Generate → batch.  
-3. If dict is huge → Hashcat Bridge → `-m 11300`.  
-4. Results → confirm dual-verify → `decrypt_all_ckeys` → offline backup → wipe.
+1. Extract → load → note iterations.  
+2. Verify → expect REAL/SUSPECT (document).  
+3. Breaker Break (Native KDF + optional Hashcat/John) **or** Passphrase Lab recall batch.  
+4. On hit → Rebuild (new passphrase) and/or Results `decrypt_all_ckeys` → offline → wipe.
 
 ### B. Corrupt / truncated wallet
 
-1. Salvage on the dump; export ranked candidates.  
-2. If mkey carved with salt/iters → attempt passphrase / hashcat export if fields complete.  
-3. If only ckeys → CUDA needs targets + pubkeys; Passphrase Lab needs mkey — reconstruct from better disk copy if possible.  
-4. Document gaps in chain-of-custody notes.
+1. Salvage + Carve; export ranked candidates.  
+2. If mkey + salt/iters complete → passphrase / hashcat.  
+3. If only fragments → locate a better disk image; document gaps in Case notes.
 
-### C. Partial AES key / cold-boot candidates
+### C. Partial AES / cold-boot
 
-1. Extract (or salvage) so mkey/ckeys are targets.  
-2. AES Partial → enter known hex prefix → Start PARTIAL CUDA **or** paste 64-hex keys → Try all.  
-3. On hit → Results / FOUND_WALLET → dual-verify → multi-ckey.  
-4. Do not extrapolate success to “we can brute unknown AES.”
+1. Extract or salvage so targets exist.  
+2. AES Partial prefix **or** paste 64-hex keys → Try all.  
+3. Hit → Results / Rebuild. Do not claim “we break unknown AES-256.”
+
+### D. Multi-wallet triage
+
+1. Extract folder scan **or** Tools → Triage (low iters first).  
+2. Verify each candidate; Case-note priority.  
+3. Attack weakest plausible first (low iters / known fragments).
 
 ---
 
@@ -400,30 +497,31 @@ Exit codes: success typically `0`; parse/salvage may return `2` when no useful m
 
 | Symptom | Checks |
 |---------|--------|
-| No CUDA devices | Driver / GPU; parse/passphrase still usable |
-| Magic BAD | Wrong file type, or use Salvage |
+| No CUDA devices | Driver/GPU; CPU workflows still usable |
+| Magic BAD | Wrong file or Salvage/Carve |
 | Passphrase Lab disabled | Need structured mkey |
-| Hashcat “(not found)” | Run `setup_forensics.bat` or install Hashcat on PATH; export still works |
-| Spawn fails | Wordlist path, hash file written, antivirus blocking CreateProcess |
-| Selftest fail | CUDA build mismatch; try `--experiment passphrase` / `secp` offline |
-| PKCS OK but pubkey fail | Treat as false positive; do not move funds |
-| Slow batch | High `nDeriveIterations`; use Hashcat GPU for large lists |
-| Drop `.dat` ignored | Extension must be `.dat` (case-insensitive) |
+| Hashcat/John/BTCRecover missing | `setup_forensics.bat` or place binaries; `--tools-status` |
+| Spawn fails | Paths, AV blocking CreateProcess, missing wordlist |
+| BIP39 NOT PRESENT | Normal for classic Core — not a bug |
+| PKCS OK, pubkey fail | False positive — do not move funds |
+| Slow native batch | High `nDeriveIterations`; use Hashcat GPU for huge lists |
+| Drop `.dat` ignored | Extension must be `.dat` |
+| Rebuild write fail | Invalid master hex or export path permissions |
 
-Rebuild issues: see `build_cuda.bat` messages for missing `vcvars64` or CUDA Toolkit.
+Build issues: `build_cuda.bat` messages for missing `vcvars64` / CUDA Toolkit.
 
 ---
 
 ## 12. Limits / honesty (read before promising results)
 
-1. **Passphrase recovery** is the primary practical path for encrypted Core wallets.  
-2. **Partial AES** is valid only with constrained unknown bytes (prefix/suffix/candidates).  
-3. **Random CUDA search** demonstrates capability and PoC — it is not a finishing strategy for unknown 256-bit keys.  
-4. **Hashcat Bridge** exports `$bitcoin$` and can spawn/stream local `hashcat.exe` / John after `setup_forensics.bat`.  
-5. **BTCRecover Lab** and **John** are first-class GUI bridges when bundles are installed.  
-6. **Classic Bitcoin Core wallet.dat has no BIP39 seed** — Breaker Carve says “NOT PRESENT” when none is found. Do not claim magic seed recovery.  
-7. **Rebuild** rematerializes owner keys under a new passphrase / WIF export — never ships fake balances.  
-8. Hibernation / pagefile analysis is **guidance + import** of user-supplied material only.  
+1. **Passphrase / KDF recovery** is the primary practical path for encrypted Core wallets.  
+2. **Partial AES** is valid only with constrained unknown bytes (prefix / candidates).  
+3. **Random CUDA search** demonstrates capability — it does not finish unknown 256-bit keys.  
+4. **Hashcat Bridge / John / BTCRecover** are process bridges after `setup_forensics.bat`.  
+5. **Classic Core wallet.dat usually has no BIP39 seed** — Carve says so; do not market seed miracles.  
+6. **Rebuild** rematerializes owner keys under a new passphrase / WIF export — never ships fake balances.  
+7. Hibernation / pagefile work is **guidance + import** of user-supplied material only.  
+8. SIMD status advertises CPU capability for native KDF — not a new cryptographic break.
 
 ---
 
@@ -434,7 +532,7 @@ Rebuild issues: see `build_cuda.bat` messages for missing `vcvars64` or CUDA Too
 | [QUICKSTART.md](QUICKSTART.md) | One-page start |
 | [RECOVERY_RESEARCH.md](RECOVERY_RESEARCH.md) | Implanted features & dead ends |
 | [HIBERNATION_FORENSICS.md](HIBERNATION_FORENSICS.md) | Authorized cold-boot / hibernation notes |
-| [FORMAT.md](FORMAT.md) | mkey/ckey 48-byte layout, WIF pipeline |
+| [FORMAT.md](FORMAT.md) | mkey/ckey layout, WIF pipeline |
 | [CUDA.md](CUDA.md) | CUDA build / kernel notes |
 | [../THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) | Third-party licenses |
 | [../README.md](../README.md) | Product README |
