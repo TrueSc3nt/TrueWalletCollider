@@ -43,12 +43,20 @@ TrueReweaveInventory truereweave_inventory(const WalletParseResult& wallet,
                           " enc_len=" + std::to_string(c.encrypted_hex.size() / 2) +
                           " pub=" + (c.pubkey_hex.empty() ? "no" : "yes"));
   }
+  inv.records.push_back("plain_key_count: " + std::to_string(wallet.plain_key_count()));
+  for (size_t i = 0; i < wallet.plain_keys.size(); ++i) {
+    const auto& k = wallet.plain_keys[i];
+    inv.records.push_back("UNENCRYPTED_KEY[" + std::to_string(i) + "] priv=" + k.priv_hex +
+                          " WIF_c=" + k.wif_compressed +
+                          (k.address.empty() ? "" : (" addr=" + k.address)));
+  }
   for (const auto& m : wallet.meta)
     inv.records.push_back("meta[" + m.tag + "] @" + std::to_string(m.offset) + " " + m.note);
   for (const auto& w : wallet.warnings) inv.records.push_back("warn: " + w);
 
   std::ostringstream s;
   s << "records=" << inv.records.size() << " ckeys=" << wallet.ckey_count()
+    << " plain_keys=" << wallet.plain_key_count()
     << " mkey=" << (wallet.mkey.found ? "yes" : "no");
   inv.summary = s.str();
   return inv;

@@ -1,5 +1,6 @@
 #include "WalletDat.h"
 #include "../crypto/crypto_wallet.h"
+#include "../crypto/secp256k1_lite.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -134,6 +135,109 @@ static bool pubkey_to_address(const std::vector<uint8_t>& pubkey, CKeyInfo& out)
   return out.address_ok;
 }
 
+static bool priv_all_zero(const uint8_t priv[32]) {
+  for (int i = 0; i < 32; ++i)
+    if (priv[i]) return false;
+  return true;
+}
+
+static bool fill_plain_key(PlainKeyInfo& pk, const uint8_t priv[32], size_t offset,
+                           const char* source) {
+  if (!priv || priv_all_zero(priv)) return false;
+  uint8_t pub[65];
+  size_t plen = 0;
+  if (!secp256k1_priv_to_pub(priv, pub, &plen, true) || plen < 33) return false;
+  pk.priv32.assign(priv, priv + 32);
+  pk.priv_hex = to_hex(priv, 32);
+  pk.wif_uncompressed = privkey_to_wif(priv, false);
+  pk.wif_compressed = privkey_to_wif(priv, true);
+  if (pk.wif_compressed.empty() && pk.wif_uncompressed.empty()) return false;
+  pk.pubkey_hex = to_hex(pub, plen);
+  pk.file_offset = offset;
+  pk.source = source ? source : "unknown";
+  CKeyInfo tmp;
+  std::vector<uint8_t> pubv(pub, pub + plen);
+  if (pubkey_to_address(pubv, tmp)) {
+    pk.address = tmp.address;
+    pk.address_ok = tmp.address_ok;
+  }
+  return true;
+}
+
+/** ASCII "key" DB type — not ckey / wkey / keymeta / defaultkey / hdpubkey. */
+static bool standalone_key_tag(const uint8_t* data, size_t len, size_t i) {
+  if (i + 3 > len || std::memcmp(data + i, "key", 3) != 0) return false;
+  if (i >= 1) {
+    uint8_t p = data[i - 1];
+    if ((p >= 'a' && p <= 'z') || (p >= 'A' && p <= 'Z') || p == '_') return false;
+  }
+  if (i + 3 < len) {
+    uint8_t n = data[i + 3];
+    if ((n >= 'a' && n <= 'z') || (n >= 'A' && n <= 'Z') || n == '_') return false;
+  }
+  return true;
+}
+
+static bool plain_key_dup(const WalletParseResult& r, const std::string& priv_hex) {
+  for (const auto& e : r.plain_keys)
+    if (e.priv_hex == priv_hex) return true;
+  return false;
+}
+
+/**
+ * Extract plaintext Core private keys (UNENCRYPTED_KEY).
+ * Encrypted ckeys are AES blobs and do NOT contain the OpenSSL DER marker —
+ * so this never reinterprets ckey ciphertext as a privkey.
+ */
+static void extract_unencrypted_keys(WalletParseResult& r, const uint8_t* data, size_t len) {
+  /* OpenSSL EC PRIVATE KEY fragment: 02 01 01 04 20 || <32-byte scalar> */
+  static const uint8_t kDer[5] = {0x02, 0x01, 0x01, 0x04, 0x20};
+  for (size_t i = 0; i + 5 + 32 <= len; ++i) {
+    if (std::memcmp(data + i, kDer, 5) != 0) continue;
+    PlainKeyInfo pk;
+    if (!fill_plain_key(pk, data + i + 5, i + 5, "der_asn1")) continue;
+    if (plain_key_dup(r, pk.priv_hex)) continue;
+    r.plain_keys.push_back(std::move(pk));
+    const auto& last = r.plain_keys.back();
+    r.log.push_back("[+] UNENCRYPTED_KEY #" + std::to_string(r.plain_keys.size()) + " @" +
+                    std::to_string(last.file_offset) + " priv=" + last.priv_hex);
+    r.log.push_back("    WIF_u=" + last.wif_uncompressed);
+    r.log.push_back("    WIF_c=" + last.wif_compressed);
+    if (last.address_ok) r.log.push_back("    addr=" + last.address);
+  }
+
+  /* BDB-style \x03key + pubkey; look nearby for OCTET STRING 04 20 || priv */
+  for (size_t i = 0; i + 5 + 33 <= len; ++i) {
+    if (!(data[i] == 0x03 && data[i + 1] == 'k' && data[i + 2] == 'e' && data[i + 3] == 'y'))
+      continue;
+    uint8_t pklen = data[i + 4];
+    if (!(pklen == 33 || pklen == 65)) continue;
+    if (i + 5 + pklen > len) continue;
+    uint8_t pref = data[i + 5];
+    if (!(pref == 0x02 || pref == 0x03 || (pklen == 65 && pref == 0x04))) continue;
+    std::string emb_pub = to_hex(data + i + 5, pklen);
+    size_t search_end = (std::min)(len, i + 5 + (size_t)pklen + 512);
+    for (size_t j = i + 5 + pklen; j + 34 <= search_end; ++j) {
+      if (data[j] != 0x04 || data[j + 1] != 0x20) continue;
+      PlainKeyInfo pk;
+      if (!fill_plain_key(pk, data + j + 2, j + 2, "key_record")) continue;
+      if (plain_key_dup(r, pk.priv_hex)) continue;
+      /* Prefer keys whose derived compressed pub matches the record pubkey */
+      if (pklen == 33 && pk.pubkey_hex != emb_pub) continue;
+      r.plain_keys.push_back(std::move(pk));
+      const auto& last = r.plain_keys.back();
+      r.log.push_back("[+] UNENCRYPTED_KEY #" + std::to_string(r.plain_keys.size()) +
+                      " (key_record) @" + std::to_string(last.file_offset) +
+                      " priv=" + last.priv_hex);
+      r.log.push_back("    WIF_c=" + last.wif_compressed +
+                      (last.address_ok ? (" addr=" + last.address) : ""));
+    }
+  }
+
+  if (!r.plain_keys.empty())
+    r.log.push_back("[+] total plaintext keys: " + std::to_string(r.plain_keys.size()));
+}
+
 static void add_meta(WalletParseResult& r, const char* tag, size_t off,
                      const uint8_t* data, size_t len, const char* note) {
   MetaHit m;
@@ -176,6 +280,10 @@ static void scan_meta_tags(WalletParseResult& r, const uint8_t* data, size_t len
     size_t n = std::strlen(t.name);
     for (size_t i = 0; i + n <= len; ++i) {
       if (std::memcmp(data + i, t.name, n) == 0) {
+        /* "key" must be a standalone tag — never match inside ckey/keymeta/… */
+        if (std::strcmp(t.name, "key") == 0 && !standalone_key_tag(data, len, i)) {
+          continue;
+        }
         /* avoid dense spam: keep first few of each, plus ckeys handled elsewhere */
         int count = 0;
         for (auto& m : r.meta)
@@ -398,6 +506,7 @@ WalletParseResult WalletDatParser::parse_bytes(const uint8_t* data, size_t len,
   }
 
   scan_meta_tags(r, data, len);
+  extract_unencrypted_keys(r, data, len);
   r.log.push_back("[+] metadata tags recorded: " + std::to_string(r.meta.size()));
   return r;
 }
@@ -431,6 +540,16 @@ std::string WalletDatParser::export_txt(const WalletParseResult& r) {
     o << "  sha256:    " << c.sha256_hex << "\n";
     o << "  ripemd160: " << c.ripemd160_hex << "\n";
     o << "  rawaddr:   " << c.address_raw_hex << "\n\n";
+  }
+  o << "=== UNENCRYPTED KEYS (" << r.plain_keys.size() << ") ===\n";
+  for (size_t i = 0; i < r.plain_keys.size(); ++i) {
+    const auto& k = r.plain_keys[i];
+    o << "[" << i << "] offset=" << k.file_offset << " source=" << k.source << "\n";
+    o << "  priv_hex:  " << k.priv_hex << "\n";
+    o << "  WIF_u:     " << k.wif_uncompressed << "\n";
+    o << "  WIF_c:     " << k.wif_compressed << "\n";
+    o << "  pubkey:    " << k.pubkey_hex << "\n";
+    o << "  address:   " << k.address << "\n\n";
   }
   o << "=== METADATA TAGS ===\n";
   for (auto& m : r.meta) {
@@ -485,6 +604,20 @@ std::string WalletDatParser::export_json(const WalletParseResult& r) {
     o << "      \"ripemd160_hex\": \"" << c.ripemd160_hex << "\",\n";
     o << "      \"offset\": " << c.file_offset << "\n";
     o << "    }" << (i + 1 < r.ckeys.size() ? "," : "") << "\n";
+  }
+  o << "  ],\n";
+  o << "  \"plain_keys\": [\n";
+  for (size_t i = 0; i < r.plain_keys.size(); ++i) {
+    const auto& k = r.plain_keys[i];
+    o << "    {\n";
+    o << "      \"offset\": " << k.file_offset << ",\n";
+    o << "      \"source\": \"" << esc(k.source) << "\",\n";
+    o << "      \"priv_hex\": \"" << k.priv_hex << "\",\n";
+    o << "      \"wif_uncompressed\": \"" << esc(k.wif_uncompressed) << "\",\n";
+    o << "      \"wif_compressed\": \"" << esc(k.wif_compressed) << "\",\n";
+    o << "      \"pubkey_hex\": \"" << k.pubkey_hex << "\",\n";
+    o << "      \"address\": \"" << esc(k.address) << "\"\n";
+    o << "    }" << (i + 1 < r.plain_keys.size() ? "," : "") << "\n";
   }
   o << "  ],\n";
   o << "  \"meta\": [\n";

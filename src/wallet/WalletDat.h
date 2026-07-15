@@ -36,6 +36,19 @@ struct CKeyInfo {
   bool address_ok = false;
 };
 
+/** Unencrypted Core `key` record / DER-carved plaintext private key (NOT ckey). */
+struct PlainKeyInfo {
+  std::vector<uint8_t> priv32;
+  std::string priv_hex;               /* 64 hex chars */
+  std::string wif_uncompressed;
+  std::string wif_compressed;
+  std::string pubkey_hex;             /* derived compressed */
+  std::string address;
+  size_t file_offset = 0;
+  std::string source;                 /* der_asn1 | key_record */
+  bool address_ok = false;
+};
+
 struct MetaHit {
   std::string tag;     /* e.g. "version", "bestblock", "name", "pool" */
   size_t offset = 0;
@@ -55,12 +68,14 @@ struct WalletParseResult {
   std::string coin_label;       /* Bitcoin / BCH / LTC / DOGE / Core fork */
   MasterKeyInfo mkey;
   std::vector<CKeyInfo> ckeys;
+  std::vector<PlainKeyInfo> plain_keys; /* UNENCRYPTED_KEY material */
   std::vector<MetaHit> meta;
   std::vector<std::string> warnings;
   std::vector<std::string> log;
 
   /* Derived / export helpers */
   int ckey_count() const { return (int)ckeys.size(); }
+  int plain_key_count() const { return (int)plain_keys.size(); }
   bool encrypted() const { return mkey.found || !ckeys.empty(); }
 };
 

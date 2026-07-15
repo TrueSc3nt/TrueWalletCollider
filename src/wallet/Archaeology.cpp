@@ -23,14 +23,28 @@ ArchaeologyReport analyze_archaeology(const WalletParseResult& wallet, const uin
   }
   r.mkey_count = (std::max)(mkeys, mkey_tags);
 
-  if (key_tags > 0) {
+  if (!wallet.plain_keys.empty() || key_tags > 0) {
     ArchaeologyFinding f;
     f.flag = "UNENCRYPTED_KEY";
-    f.detail = "legacy unencrypted 'key' records detected (" + std::to_string(key_tags) +
-               ") — may contain plaintext privkeys";
     f.severity = 3;
+    if (!wallet.plain_keys.empty()) {
+      const auto& pk = wallet.plain_keys[0];
+      std::ostringstream d;
+      d << wallet.plain_keys.size() << " plaintext privkey(s) — priv=" << pk.priv_hex
+        << " WIF_c=" << pk.wif_compressed;
+      if (!pk.wif_uncompressed.empty()) d << " WIF_u=" << pk.wif_uncompressed;
+      if (pk.address_ok) d << " addr=" << pk.address;
+      if (wallet.plain_keys.size() > 1)
+        d << " (+" << (wallet.plain_keys.size() - 1) << " more; see Extract panel / export)";
+      f.detail = d.str();
+      f.offset = pk.file_offset;
+      r.unencrypted_keys = (int)wallet.plain_keys.size();
+    } else {
+      f.detail = "legacy unencrypted 'key' tags detected (" + std::to_string(key_tags) +
+                 ") — no DER/scalar carved yet";
+      r.unencrypted_keys = key_tags;
+    }
     r.findings.push_back(f);
-    r.unencrypted_keys = key_tags;
   }
 
   if (wallet.mkey.found && wallet.mkey.iterations > 0 && wallet.mkey.iterations < 10000) {
@@ -79,7 +93,7 @@ ArchaeologyReport analyze_archaeology(const WalletParseResult& wallet, const uin
   }
 
   std::ostringstream s;
-  s << "Archaeology: mkeys=" << r.mkey_count << " unencrypted_key_tags=" << r.unencrypted_keys
+  s << "Archaeology: mkeys=" << r.mkey_count << " unencrypted_keys=" << r.unencrypted_keys
     << " plaintext_scraps=" << r.plaintext_scraps << " findings=" << r.findings.size();
   r.summary = s.str();
   return r;

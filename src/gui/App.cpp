@@ -91,6 +91,7 @@ struct AppState {
   bool include_mkey = true;
   bool include_ckeys = true;
   int selected_ckey = -1;
+  int selected_plain_key = -1;
 
   /* Extract / folder scan */
   char scan_folder[512] = {};
@@ -419,9 +420,11 @@ static void load_wallet_path(AppState& app, const std::string& path) {
     if (app.user_coin_tag[0]) app.wallet.coin_label = app.user_coin_tag;
     app.archaeology = analyze_archaeology(app.wallet, app.wallet_raw.data(), app.wallet_raw.size());
     app.selected_ckey = app.wallet.ckeys.empty() ? -1 : 0;
+    app.selected_plain_key = app.wallet.plain_keys.empty() ? -1 : 0;
     for (auto& f : app.archaeology.findings)
       app.log("[arch] " + f.flag + ": " + f.detail);
     app.log("[+] Core-family ready — " + std::to_string(app.wallet.ckeys.size()) + " ckeys | " +
+            std::to_string(app.wallet.plain_keys.size()) + " plain keys | " +
             app.wallet.coin_label + " | " + app.wallet.storage_kind);
     if (app.target_address[0]) {
       for (size_t i = 0; i < app.wallet.ckeys.size(); ++i) {
@@ -516,6 +519,7 @@ static void load_poc_wallet(AppState& app) {
   app.wallet_raw.clear();
   app.archaeology = analyze_archaeology(app.wallet, nullptr, 0);
   app.selected_ckey = 0;
+  app.selected_plain_key = -1;
   app.log("[+] loaded bundled PoC ckey + pubkey");
 }
 
@@ -678,6 +682,52 @@ static void draw_ckeys_panel(AppState& app) {
     if (ImGui::Button("Copy pub")) set_clipboard(c.pubkey_hex);
     ImGui::SameLine();
     if (ImGui::Button("Copy address")) set_clipboard(c.address);
+  }
+  ImGui::EndChild();
+}
+
+static void draw_plain_keys_panel(AppState& app) {
+  if (!app.has_wallet) {
+    ImGui::TextDisabled("Load a wallet first.");
+    return;
+  }
+  if (app.wallet.plain_keys.empty()) {
+    ImGui::TextDisabled(
+        "No plaintext UNENCRYPTED_KEY material (encrypted ckeys are listed under CKeys).");
+    return;
+  }
+  ImGui::TextColored(ImVec4(1.f, 0.55f, 0.35f, 1.f),
+                     "%d unencrypted private key(s) — owner recovery display",
+                     (int)app.wallet.plain_keys.size());
+  ImGui::BeginChild("plain_list", ImVec2(260, 0), true);
+  for (int i = 0; i < (int)app.wallet.plain_keys.size(); ++i) {
+    char label[160];
+    auto& k = app.wallet.plain_keys[i];
+    if (!k.address.empty())
+      std::snprintf(label, sizeof(label), "#%d %s", i, k.address.c_str());
+    else
+      std::snprintf(label, sizeof(label), "#%d %.12s…", i, k.priv_hex.c_str());
+    if (ImGui::Selectable(label, app.selected_plain_key == i)) app.selected_plain_key = i;
+  }
+  ImGui::EndChild();
+  ImGui::SameLine();
+  ImGui::BeginChild("plain_detail", ImVec2(0, 0), true);
+  if (app.selected_plain_key >= 0 &&
+      app.selected_plain_key < (int)app.wallet.plain_keys.size()) {
+    auto& k = app.wallet.plain_keys[app.selected_plain_key];
+    ImGui::Text("Offset: %zu | source: %s", k.file_offset, k.source.c_str());
+    ImGui::TextWrapped("Address: %s", k.address.c_str());
+    ImGui::TextWrapped("priv_hex:\n%s", k.priv_hex.c_str());
+    ImGui::TextWrapped("WIF_u: %s", k.wif_uncompressed.c_str());
+    ImGui::TextWrapped("WIF_c: %s", k.wif_compressed.c_str());
+    ImGui::TextWrapped("pubkey:\n%s", k.pubkey_hex.c_str());
+    if (ImGui::Button("Copy priv hex")) set_clipboard(k.priv_hex);
+    ImGui::SameLine();
+    if (ImGui::Button("Copy WIF_c")) set_clipboard(k.wif_compressed);
+    ImGui::SameLine();
+    if (ImGui::Button("Copy WIF_u")) set_clipboard(k.wif_uncompressed);
+    ImGui::SameLine();
+    if (ImGui::Button("Copy address")) set_clipboard(k.address);
   }
   ImGui::EndChild();
 }
@@ -857,6 +907,11 @@ static void draw_extract_tab(AppState& app) {
   }
   if (ImGui::CollapsingHeader("Archaeology flags", ImGuiTreeNodeFlags_DefaultOpen))
     draw_archaeology_flags(app);
+  {
+    ImGuiTreeNodeFlags pk_flags =
+        app.wallet.plain_keys.empty() ? 0 : ImGuiTreeNodeFlags_DefaultOpen;
+    if (ImGui::CollapsingHeader("Unencrypted keys", pk_flags)) draw_plain_keys_panel(app);
+  }
   if (ImGui::CollapsingHeader("Master key", ImGuiTreeNodeFlags_DefaultOpen)) draw_mkey_panel(app);
   if (ImGui::CollapsingHeader("CKeys")) draw_ckeys_panel(app);
   if (ImGui::CollapsingHeader("Metadata")) draw_meta_panel(app);

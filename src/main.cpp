@@ -300,7 +300,7 @@ int main(int argc, char** argv) {
           if (hf) hf << hc << "\n";
         }
       }
-      return r.ckeys.empty() && !r.mkey.found ? 2 : 0;
+      return r.ckeys.empty() && !r.mkey.found && r.plain_keys.empty() ? 2 : 0;
     }
     if (a == "--export-hashcat" && argc >= 3) {
       WalletDatParser p;
