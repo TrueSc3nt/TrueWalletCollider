@@ -55,14 +55,38 @@ bool write_hashcat_file(const WalletParseResult& wallet, const std::string& path
   return true;
 }
 
+static bool file_exists_path(const std::string& p) {
+  std::ifstream f(p, std::ios::binary);
+  return (bool)f;
+}
+
 std::string find_hashcat_exe() {
 #ifdef _WIN32
+  /* Prefer suite-bundled Hashcat from setup_forensics.bat */
+  static const char* bundled[] = {
+      "third_party\\hashcat\\hashcat.exe",
+      "third_party/hashcat/hashcat.exe",
+      ".\\third_party\\hashcat\\hashcat.exe",
+  };
+  for (const char* rel : bundled) {
+    if (file_exists_path(rel)) return rel;
+  }
+  char module[MAX_PATH] = {};
+  if (GetModuleFileNameA(nullptr, module, MAX_PATH)) {
+    std::string dir = module;
+    size_t slash = dir.find_last_of("\\/");
+    if (slash != std::string::npos) {
+      std::string cand = dir.substr(0, slash + 1) + "third_party\\hashcat\\hashcat.exe";
+      if (file_exists_path(cand)) return cand;
+    }
+  }
   char buf[MAX_PATH];
   DWORD n = SearchPathA(nullptr, "hashcat.exe", nullptr, MAX_PATH, buf, nullptr);
   if (n > 0 && n < MAX_PATH) return buf;
   n = SearchPathA(nullptr, "hashcat", nullptr, MAX_PATH, buf, nullptr);
   if (n > 0 && n < MAX_PATH) return buf;
 #else
+  if (file_exists_path("third_party/hashcat/hashcat")) return "third_party/hashcat/hashcat";
   FILE* p = popen("command -v hashcat 2>/dev/null", "r");
   if (p) {
     char line[512] = {};

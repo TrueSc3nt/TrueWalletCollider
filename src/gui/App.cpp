@@ -866,15 +866,24 @@ static void draw_hashcat_bridge_tab(AppState& app) {
       app.log("[E] hash export failed");
   }
   if (app.hashcat_exe_cached.empty()) app.hashcat_exe_cached = find_hashcat_exe();
-  ImGui::Text("hashcat: %s", app.hashcat_exe_cached.empty() ? "(not found on PATH)" : app.hashcat_exe_cached.c_str());
+  ImGui::Text("hashcat: %s",
+              app.hashcat_exe_cached.empty() ? "(not found — run setup_forensics.bat or add PATH)"
+                                             : app.hashcat_exe_cached.c_str());
+  if (ImGui::Button("Rescan hashcat")) {
+    app.hashcat_exe_cached = find_hashcat_exe();
+    app.log(app.hashcat_exe_cached.empty() ? "[!] hashcat still missing"
+                                           : "[+] hashcat: " + app.hashcat_exe_cached);
+  }
   ImGui::InputText("Wordlist (optional)", app.hashcat_wordlist, sizeof(app.hashcat_wordlist));
   if (ImGui::Button("Spawn hashcat -m 11300")) {
+    app.hashcat_exe_cached = find_hashcat_exe();
     auto r = spawn_hashcat_attack(app.hashcat_export_path, app.hashcat_wordlist, app.hashcat_exe_cached);
     app.log(r.message);
   }
   ImGui::Separator();
   ImGui::TextWrapped(
       "Manual: hashcat -m 11300 -a 0 wallet_hash.txt wordlist.txt\n"
+      "Bundled path after setup: third_party\\hashcat\\hashcat.exe\n"
       "John the Ripper: bitcoin2john wallet.dat > hash.txt");
 }
 

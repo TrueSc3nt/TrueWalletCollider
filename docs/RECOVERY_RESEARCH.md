@@ -1,7 +1,9 @@
-# Recovery Research — TrueWalletCollider Recovery Lab
+# Recovery Research — TrueWalletCollider Forensic Suite / Recovery Lab
 
 Authorized **owner recovery / cryptanalysis R&D** toolkit for Bitcoin Core `wallet.dat`.  
 This document summarizes what was implanted, what works, and dead ends we do **not** claim.
+
+**Operator manuals:** [USER_GUIDE.md](USER_GUIDE.md) · [QUICKSTART.md](QUICKSTART.md) · [../README.md](../README.md)
 
 ## Honest scope
 

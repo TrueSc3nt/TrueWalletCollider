@@ -35,3 +35,11 @@ samples/
 
 # Nested git of deps — keep trees, ignore their .git if using subtree
 # (vendored copies may include their own .git; strip before release if needed)
+
+# Large forensic tool bundles (fetched by setup_forensics.bat)
+/third_party/hashcat/
+/third_party/_staging/
+/third_party/btcrecover/
+/third_party/python-embed/
+/third_party/john/
+/cases/
