@@ -1,9 +1,12 @@
 #include "ForensicTools.h"
+#include "Passphrase.h"
 #include "../crypto/crypto_wallet.h"
 
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
+#include <ctime>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -17,8 +20,10 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <wincrypt.h>
 #include <winhttp.h>
 #pragma comment(lib, "winhttp.lib")
+#pragma comment(lib, "advapi32.lib")
 #endif
 
 static int hex_nib(char c) {
@@ -157,6 +162,102 @@ Bip39Result bip39_validate_mnemonic(const std::string& mnemonic) {
   r.message = r.checksum_ok ? ("OK BIP39 checksum (" + std::to_string(r.word_count) + " words)")
                             : "checksum FAIL";
   return r;
+}
+
+bool bip39_generate_mnemonic(int word_count, std::string* mnemonic_out, std::string* err) {
+  if (!mnemonic_out) {
+    if (err) *err = "null out";
+    return false;
+  }
+  if (!(word_count == 12 || word_count == 24)) {
+    if (err) *err = "word_count must be 12 or 24";
+    return false;
+  }
+  std::vector<std::string> words;
+  std::string el;
+  if (!bip39_load_wordlist(&words, &el)) {
+    if (err) *err = el;
+    return false;
+  }
+  int ent_bytes = (word_count == 12) ? 16 : 32;
+  std::vector<uint8_t> entropy(ent_bytes);
+#ifdef _WIN32
+  HCRYPTPROV prov = 0;
+  if (!CryptAcquireContextW(&prov, nullptr, nullptr, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT) ||
+      !CryptGenRandom(prov, (DWORD)entropy.size(), entropy.data())) {
+    if (prov) CryptReleaseContext(prov, 0);
+    /* fallback */
+    for (size_t i = 0; i < entropy.size(); ++i)
+      entropy[i] = (uint8_t)((std::rand() ^ (i * 17) ^ (unsigned)std::time(nullptr)) & 0xff);
+  } else {
+    CryptReleaseContext(prov, 0);
+  }
+#else
+  for (size_t i = 0; i < entropy.size(); ++i)
+    entropy[i] = (uint8_t)(std::rand() & 0xff);
+#endif
+  uint8_t hash[32];
+  sha256(entropy.data(), entropy.size(), hash);
+  int cs_bits = ent_bytes * 8 / 32;
+  int total_bits = ent_bytes * 8 + cs_bits;
+  std::vector<uint8_t> bits((total_bits + 7) / 8, 0);
+  for (size_t i = 0; i < entropy.size(); ++i) bits[i] = entropy[i];
+  for (int i = 0; i < cs_bits; ++i) {
+    int bp = ent_bytes * 8 + i;
+    if (hash[0] & (1 << (7 - i))) bits[bp / 8] |= (uint8_t)(1 << (7 - (bp % 8)));
+  }
+  std::ostringstream oss;
+  for (int w = 0; w < word_count; ++w) {
+    int idx = 0;
+    for (int b = 0; b < 11; ++b) {
+      int bp = w * 11 + b;
+      if (bits[bp / 8] & (1 << (7 - (bp % 8)))) idx |= (1 << (10 - b));
+    }
+    if (w) oss << ' ';
+    oss << words[(size_t)idx];
+  }
+  *mnemonic_out = oss.str();
+  auto v = bip39_validate_mnemonic(*mnemonic_out);
+  if (!v.ok) {
+    if (err) *err = "generated mnemonic failed self-validate: " + v.message;
+    return false;
+  }
+  return true;
+}
+
+bool bip39_mnemonic_to_seed(const std::string& mnemonic, const std::string& passphrase,
+                            uint8_t seed64[64], std::string* err) {
+  if (!seed64) {
+    if (err) *err = "null seed";
+    return false;
+  }
+  auto v = bip39_validate_mnemonic(mnemonic);
+  if (!v.ok) {
+    if (err) *err = v.message;
+    return false;
+  }
+  /* Normalize: collapse whitespace to single spaces (already lowercased by validate path —
+     re-tokenize similarly here). */
+  std::string norm;
+  std::string cur;
+  for (char c : mnemonic) {
+    if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+      if (!cur.empty()) {
+        if (!norm.empty()) norm.push_back(' ');
+        norm += cur;
+        cur.clear();
+      }
+    } else
+      cur.push_back((char)std::tolower((unsigned char)c));
+  }
+  if (!cur.empty()) {
+    if (!norm.empty()) norm.push_back(' ');
+    norm += cur;
+  }
+  std::string salt = "mnemonic" + passphrase;
+  pbkdf2_hmac_sha512(reinterpret_cast<const uint8_t*>(norm.data()), norm.size(),
+                     reinterpret_cast<const uint8_t*>(salt.data()), salt.size(), 2048, seed64, 64);
+  return true;
 }
 
 BrainwalletResult brainwallet_sha256_to_wif(const std::string& passphrase) {

@@ -286,6 +286,56 @@ bool craft_encrypted_mkey48(const std::string& passphrase, const uint8_t salt8[8
   return true;
 }
 
+void hmac_sha512(const uint8_t* key, size_t key_len, const uint8_t* data, size_t data_len,
+                 uint8_t out64[64]) {
+  uint8_t k0[128];
+  std::memset(k0, 0, sizeof(k0));
+  if (key_len > 128) {
+    sha512(key, key_len, k0);
+  } else {
+    std::memcpy(k0, key, key_len);
+  }
+  uint8_t ipad[128], opad[128];
+  for (int i = 0; i < 128; ++i) {
+    ipad[i] = (uint8_t)(k0[i] ^ 0x36);
+    opad[i] = (uint8_t)(k0[i] ^ 0x5c);
+  }
+  std::vector<uint8_t> inner(128 + data_len);
+  std::memcpy(inner.data(), ipad, 128);
+  if (data_len) std::memcpy(inner.data() + 128, data, data_len);
+  uint8_t ihash[64];
+  sha512(inner.data(), inner.size(), ihash);
+  uint8_t outer[128 + 64];
+  std::memcpy(outer, opad, 128);
+  std::memcpy(outer + 128, ihash, 64);
+  sha512(outer, sizeof(outer), out64);
+}
+
+void pbkdf2_hmac_sha512(const uint8_t* pass, size_t pass_len, const uint8_t* salt, size_t salt_len,
+                        unsigned iterations, uint8_t* out, size_t out_len) {
+  size_t offset = 0;
+  uint32_t block = 1;
+  while (offset < out_len) {
+    std::vector<uint8_t> msg(salt_len + 4);
+    if (salt_len) std::memcpy(msg.data(), salt, salt_len);
+    msg[salt_len] = (uint8_t)(block >> 24);
+    msg[salt_len + 1] = (uint8_t)(block >> 16);
+    msg[salt_len + 2] = (uint8_t)(block >> 8);
+    msg[salt_len + 3] = (uint8_t)block;
+    uint8_t u[64], t[64];
+    hmac_sha512(pass, pass_len, msg.data(), msg.size(), u);
+    std::memcpy(t, u, 64);
+    for (unsigned i = 1; i < iterations; ++i) {
+      hmac_sha512(pass, pass_len, u, 64, u);
+      for (int j = 0; j < 64; ++j) t[j] ^= u[j];
+    }
+    size_t take = (out_len - offset < 64) ? (out_len - offset) : 64;
+    std::memcpy(out + offset, t, take);
+    offset += take;
+    ++block;
+  }
+}
+
 bool verify_wif(const std::string& wif, std::string* detail_out) {
   std::vector<uint8_t> raw;
   if (b58_decode(wif, raw) != 0 || raw.size() < 5) {

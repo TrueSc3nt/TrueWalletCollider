@@ -110,3 +110,51 @@ RebuildPackage breaker_rebuild(const uint8_t master32[32], const WalletParseResu
                                bool craft_research_mkey = true);
 
 bool breaker_write_package(const RebuildPackage& pkg, const std::string& out_prefix);
+
+/* ── Force Rebuild (Experimental) ───────────────────────────────────────────
+ * Creates a NEW BIP39 key set + research mkey under a new passphrase.
+ * Does NOT decrypt original encrypted ckeys. Does NOT unlock original funds.
+ * May include UNENCRYPTED_KEY material found during carve (real salvage).
+ */
+struct ForceRebuildOptions {
+  std::string new_mnemonic;           /* empty → generate 12-word BIP39 */
+  std::string bip39_passphrase;       /* optional BIP39 passphrase (usually empty) */
+  std::string new_wallet_passphrase;  /* e.g. "adam" for research mkey */
+  uint32_t new_iterations = 50000;
+  std::string export_dir = "rebuilt_NEW_wallet_EXPORT";
+  bool write_side_wallet = false;     /* write wallet.dat.reweave_new beside original */
+  std::string original_wallet_path;   /* for side-by-side write */
+  int sample_address_count = 5;
+};
+
+struct ForceRebuildResult {
+  bool ok = false;
+  bool decrypts_original_ckeys = false; /* always false — honesty stamp */
+  std::string warning_banner;
+  std::string message;
+  std::string mnemonic;
+  std::string seed_hex;
+  std::string bip32_master_priv_hex;
+  std::string bip32_chain_hex;
+  std::string xprv;
+  std::string xpub;
+  std::string research_mkey_enc_hex;
+  std::string research_mkey_salt_hex;
+  uint32_t research_mkey_iters = 0;
+  std::vector<RebuildKeyExport> new_seed_keys;   /* from NEW BIP39 only */
+  std::vector<RebuildKeyExport> salvaged_plain;  /* UNENCRYPTED_KEY from carve/parse */
+  CarveReport carve;
+  std::string inventory_summary;
+  std::string json_bundle;
+  std::string txt_bundle;
+  std::string export_dir_written;
+  std::string side_wallet_path;
+  bool wrote_side_wallet = false;
+};
+
+/** Always rips apart (carve+inventory), then builds NEW-seed rematerialization package. */
+ForceRebuildResult force_rebuild_experimental(const WalletParseResult& wallet,
+                                              const std::vector<uint8_t>& raw,
+                                              const ForceRebuildOptions& opt);
+
+std::string force_rebuild_warning_banner();

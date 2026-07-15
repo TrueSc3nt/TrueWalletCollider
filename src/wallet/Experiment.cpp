@@ -2,6 +2,8 @@
 #include "DualVerify.h"
 #include "HashcatExport.h"
 #include "Passphrase.h"
+#include "BreakerRebuild.h"
+#include "ForensicTools.h"
 #include "../crypto/secp256k1_lite.h"
 
 #include <cstring>
@@ -13,7 +15,8 @@ std::string experiment_help() {
          "  dual_fp       Random AES-key FP rate: PKCS vs PKCS+EC\n"
          "  passphrase    Method-0 KDF craft → decrypt → dual-verify smoke\n"
          "  secp          secp256k1 compressed-G selftest\n"
-         "  hashcat_fmt   Document $bitcoin$ / hashcat -m 11300 interop\n";
+         "  hashcat_fmt   Document $bitcoin$ / hashcat -m 11300 interop\n"
+         "  force_rebuild BIP39 generate → seed → Force Rebuild package smoke\n";
 }
 
 int experiment_passphrase_selftest(std::string* log_out) {
@@ -110,6 +113,38 @@ int run_experiment(const std::string& name, std::string* log_out) {
     return ok ? 0 : 1;
   }
   if (name == "passphrase") return experiment_passphrase_selftest(log_out);
+  if (name == "force_rebuild") {
+    std::ostringstream o;
+    o << "[+] Experiment: Force Rebuild (does NOT unlock original ckeys)\n";
+    std::string mnem, err;
+    if (!bip39_generate_mnemonic(12, &mnem, &err)) {
+      o << "[E] bip39_generate: " << err << "\n";
+      if (log_out) *log_out = o.str();
+      return 1;
+    }
+    o << "[+] mnemonic: " << mnem << "\n";
+    WalletParseResult empty;
+    empty.path = "(force_rebuild_smoke)";
+    ForceRebuildOptions fo;
+    fo.new_mnemonic = mnem;
+    fo.new_wallet_passphrase = "adam";
+    fo.new_iterations = 100;
+    fo.export_dir = "rebuilt_NEW_wallet_EXPORT";
+    fo.write_side_wallet = false;
+    auto r = force_rebuild_experimental(empty, {}, fo);
+    o << r.warning_banner << "\n";
+    o << r.message << "\n";
+    o << "keys=" << r.new_seed_keys.size() << " xprv_len=" << r.xprv.size()
+      << " mkey_enc=" << (r.research_mkey_enc_hex.empty() ? "no" : "yes") << "\n";
+    if (!r.ok || r.new_seed_keys.empty() || r.decrypts_original_ckeys) {
+      o << "[E] force_rebuild smoke FAIL\n";
+      if (log_out) *log_out = o.str();
+      return 1;
+    }
+    o << "[+] force_rebuild experiment PASSED (NEW keys only; no bypass)\n";
+    if (log_out) *log_out = o.str();
+    return 0;
+  }
   if (name == "hashcat_fmt") {
     std::ostringstream o;
     o << "Format: $bitcoin$64$<last32encHEX>$16$<saltHEX>$<iters>$2$00$2$00\n";

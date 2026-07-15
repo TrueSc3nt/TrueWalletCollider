@@ -25,14 +25,16 @@ Dear ImGui + GLFW + OpenGL GUI with embedded **CUDA AES** search (TrueMkeyCollid
 
 Derivation path hints (walletsrecovery.org style): **BTC BIP44/49/84/86**, **ETH `m/44'/60'/0'/0/0`**, **SOL `m/44'/501'/0'/0'`**.
 
-**TrueReweave** inventories every record and rematerializes under a **new passphrase** with WIF/JSON export. Explicitly **forbids** fake “replace BIP39 inside Core `wallet.dat`” (classic Core never stored BIP39).
+**TrueReweave** inventories every record and rematerializes under a **new passphrase** with WIF/JSON export **after unlock**. Explicitly **forbids** fake “replace BIP39 inside Core `wallet.dat`” (classic Core never stored BIP39).
+
+**Force Rebuild (Experimental)** always rips apart the wallet, then exports a **new** BIP39 seed / xprv / sample addresses / research mkey under a passphrase you choose, plus any carved **UNENCRYPTED_KEY** material. It does **not** decrypt original encrypted `ckey` blobs and is **not** a bypass of wallet.dat protection.
 
 CLI: `--formats` · `--detect FILE` · `--open-any FILE`
 
 > **Authorized use only** — wallet owners, businesses recovering their own assets, and DFIR under clear legal authority.  
 > Unauthorized access to wallets or systems is illegal.  
 > Classic Bitcoin Core `wallet.dat` typically stores **no BIP39 mnemonic** — Breaker Lab reports that honestly.  
-> Passphrase/KDF + dual-verify + salvage + **partial** AES are the real levers. Raw full AES-256 against unknown keys remains **2^256**.  
+> **There is no magic bypass** of wallet.dat AES/mkey without the passphrase. Real levers: passphrase/KDF + dual-verify + salvage + **partial** AES + UNENCRYPTED keys. Raw full AES-256 against unknown keys remains **2^256**.  
 > Memory / VSS features are **guided capture + import** of user-supplied dumps (and elevated PowerShell VSS copy). **No silent RAM stealers.**  
 > **Commercial LE / on-chain tools are Integration Hub bridges only** — never claimed as free embeds. GPU seed tools may be experimental. **On-chain labeling ≠ crack.**
 
@@ -48,7 +50,7 @@ CLI: `--formats` · `--detect FILE` · `--open-any FILE`
 | **Salvage** | Carve mkey/ckey from damaged dumps; heatmap + ranked candidates |
 | **Passphrase Lab** | Method-0 KDF, dict/mask/recall wizard, dual-verify batch, measured H/s |
 | **AES Partial** | CUDA prefix search (`MODE_PARTIAL`) + cold-boot hex candidates |
-| **Breaker & Rebuild** | Orchestrate verify/carve/KDF/Hashcat/John/BTCRecover; **TrueReweave** inventory + rematerialize (no fake Core BIP39 rewrite) |
+| **Breaker & Rebuild** | Orchestrate verify/carve/KDF/Hashcat/John/BTCRecover; **TrueReweave** after unlock; **Force Rebuild (Experimental)** = NEW BIP39 export (does **not** unlock original encrypted ckeys) |
 | **Outside Box** | All 23 archaeology / memory-import / structural / lab-exotic modules (see below) |
 | **Verify** | REAL / SUSPECT / FAKE / CORRUPT checklist (wallet, `$bitcoin$`, pasted mkey/ckey) |
 | **Case** | `cases/<id>/` notes, artifact copies, PowerShell zip export |

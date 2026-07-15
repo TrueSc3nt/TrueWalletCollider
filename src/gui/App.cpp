@@ -204,10 +204,21 @@ struct AppState {
   bool breaker_new_same_as_unlock = true;
   bool breaker_try_dict = true;
   bool breaker_queue_hashcat = true;
+  bool breaker_queue_john = true;
   char breaker_out_prefix[260] = "breaker_oneclick";
   std::string breaker_progress;
   bool breaker_busy = false;
   std::thread breaker_thread;
+
+  /* Force Rebuild (Experimental) — NEW seed; does NOT unlock original ckeys */
+  char force_seedphrase[1024] = {};
+  char force_new_pass[256] = "adam";
+  char force_export_dir[260] = "rebuilt_NEW_wallet_EXPORT";
+  int force_iters = 50000;
+  bool force_write_side = false;
+  bool force_confirm_side = false;
+  ForceRebuildResult force_result;
+  bool has_force = false;
 
   /* Open Any Wallet / multi-format */
   DetectedWallet detected;
@@ -534,7 +545,7 @@ static void breaker_plog(AppState& app, const std::string& line) {
   app.log(line);
 }
 
-/** One-click: load → inventory → try unlock → decrypt/TrueReweave OR queue crack with cand. */
+/** One-click: rip apart → try unlock → decrypt/TrueReweave OR queue crack (no magic bypass). */
 static void run_full_breaker_pipeline(AppState& app, const std::string& path) {
   app.breaker_progress.clear();
   if (path.empty()) {
@@ -548,17 +559,29 @@ static void run_full_breaker_pipeline(AppState& app, const std::string& path) {
   const std::string new_pass = app.breaker_new_pass[0] ? app.breaker_new_pass : unlock;
 
   breaker_plog(app, "=== Full Breaker start ===");
+  breaker_plog(app, "Honesty: there is NO magic bypass of wallet.dat AES/mkey without passphrase.");
   breaker_plog(app, "[1] Open Any Wallet: " + path);
   load_wallet_path(app, path);
 
+  /* Mandatory rip-apart first */
+  breaker_plog(app, "[2] Rip apart (carve + inventory) — always, even if passphrase will fail");
+  app.carve_report =
+      breaker_carve(app.wallet_raw.empty() ? nullptr : app.wallet_raw.data(), app.wallet_raw.size(),
+                    app.has_wallet ? &app.wallet : nullptr);
+  app.has_carve = true;
+  breaker_plog(app, app.carve_report.summary);
   if (app.has_reweave_inv) {
-    breaker_plog(app, "[2] Inventory: " + app.reweave_inv.summary);
+    breaker_plog(app, "[2b] Inventory: " + app.reweave_inv.summary);
     for (size_t i = 0; i < app.reweave_inv.records.size() && i < 12; ++i)
       breaker_plog(app, "    · " + app.reweave_inv.records[i]);
   }
+  if (app.has_wallet && app.wallet.plain_key_count() > 0) {
+    breaker_plog(app, "[+] Found " + std::to_string(app.wallet.plain_key_count()) +
+                          " UNENCRYPTED_KEY(s) — real salvage (not a bypass)");
+  }
 
   if (app.has_detected && !app.detected.hash_export_path.empty()) {
-    breaker_plog(app, std::string("[2b] Hash export: ") + app.detected.hash_export_path +
+    breaker_plog(app, std::string("[2c] Hash export: ") + app.detected.hash_export_path +
                           (app.detected.hashcat_mode
                                ? (std::string(" (-m ") + std::to_string(app.detected.hashcat_mode) + ")")
                                : std::string()));
@@ -567,7 +590,7 @@ static void run_full_breaker_pipeline(AppState& app, const std::string& path) {
   if (!app.has_wallet || !app.wallet.mkey.found) {
     breaker_plog(app,
                  "[!] No Core mkey — cannot unlock with passphrase here. Extract/hash path ready; "
-                 "wrong format or unencrypted/plain inventory only. Honesty: no magic unlock.");
+                 "unencrypted/plain inventory only. Honesty: no magic unlock.");
     if (app.has_detected && !app.detected.hash_line.empty()) {
       breaker_plog(app, "[…] Queuing crack hint: " + app.detected.crack_hint);
       if (app.breaker_queue_hashcat && !app.detected.hash_export_path.empty()) {
@@ -580,7 +603,7 @@ static void run_full_breaker_pipeline(AppState& app, const std::string& path) {
                               " — " + r.message);
       }
     }
-    breaker_plog(app, "=== Full Breaker done (no Core unlock) ===");
+    breaker_plog(app, "=== Full Breaker done (no Core unlock) — use Force Rebuild for NEW-seed export ===");
     return;
   }
 
@@ -591,7 +614,7 @@ static void run_full_breaker_pipeline(AppState& app, const std::string& path) {
   app.has_last_dual = true;
 
   if (app.last_dual.ok && !app.last_dual.master_hex.empty()) {
-    breaker_plog(app, "[+] Unlock OK — master recovered");
+    breaker_plog(app, "[+] Unlock OK — master recovered (real passphrase path)");
     std::strncpy(app.recovered_master_hex, app.last_dual.master_hex.c_str(),
                  sizeof(app.recovered_master_hex) - 1);
     uint8_t master[32];
@@ -626,7 +649,6 @@ static void run_full_breaker_pipeline(AppState& app, const std::string& path) {
   breaker_plog(app, "[!] Unlock miss — wrong passphrase cannot magic-unlock. Continuing extract + crack.");
   breaker_plog(app, app.last_dual.message);
 
-  /* Prefer unlock as first native/hashcat candidate */
   std::vector<std::string> cands;
   if (!unlock.empty()) cands.push_back(unlock);
   if (app.breaker_try_dict && !app.candidates.empty()) {
@@ -660,10 +682,12 @@ static void run_full_breaker_pipeline(AppState& app, const std::string& path) {
   app.orch_opt.do_carve = true;
   app.orch_opt.do_native_kdf = true;
   app.orch_opt.do_hashcat = app.breaker_queue_hashcat;
+  app.orch_opt.do_john = app.breaker_queue_john;
   app.orch_opt.use_cpu = true;
 
   breaker_plog(app, std::string("[5] trying… native KDF") +
-                        (app.breaker_queue_hashcat ? " + Hashcat queue" : "") + " (" +
+                        (app.breaker_queue_hashcat ? " + Hashcat" : "") +
+                        (app.breaker_queue_john ? " + John" : "") + " (" +
                         std::to_string(cands.size()) + " candidates, first=\"" + unlock + "\")");
 
   app.orch_report =
@@ -676,7 +700,7 @@ static void run_full_breaker_pipeline(AppState& app, const std::string& path) {
                  sizeof(app.recovered_master_hex) - 1);
     uint8_t master[32];
     if (hex_to_master32(app.recovered_master_hex, master)) {
-      breaker_plog(app, "[+] Crack hit — rematerializing with new passphrase");
+      breaker_plog(app, "[+] Crack hit — dual-verify OK; rematerializing with new passphrase");
       app.multi_decrypt = decrypt_all_ckeys(master, app.wallet, app.found_path);
       app.has_multi_decrypt = true;
       app.reweave_result =
@@ -687,8 +711,8 @@ static void run_full_breaker_pipeline(AppState& app, const std::string& path) {
     }
   } else {
     breaker_plog(app,
-                 "Honesty: passphrase wrong / not in list — wallet loaded + hash exported; crackers "
-                 "may still be running.");
+                 "Honesty: passphrase wrong / not in list — wallet ripped apart + hash exported; "
+                 "crackers may still be running. Force Rebuild = NEW keys only (not original funds).");
   }
   breaker_plog(app, "=== Full Breaker done ===");
 }
@@ -1738,15 +1762,15 @@ static void draw_breaker_rebuild_tab(AppState& app) {
   ImGui::TextDisabled("Made by TrueScent — authorized owner rematerialization only");
   ImGui::TextWrapped(
       "Break = orchestrate verify + carve + native CPU KDF (+ AVX workers) + Hashcat/John/BTCRecover. "
-      "Rebuild = decrypt keys, optional re-encrypt mkey under YOUR passphrase, export WIF/JSON. "
-      "Does NOT invent BIP39 seeds for classic Core wallets that never stored one.");
+      "Rebuild = decrypt keys AFTER unlock, optional re-encrypt mkey under YOUR passphrase, export WIF/JSON. "
+      "There is NO magic bypass of wallet.dat encryption without the passphrase.");
   ImGui::TextColored(ImVec4(0.45f, 0.75f, 0.9f, 1.f), "%s", cpu_simd_detect().status_line.c_str());
   ImGui::Separator();
 
   ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.35f, 1.f), "One-click Full Breaker");
   ImGui::TextWrapped(
-      "Open wallet.dat → auto Extract/Open Any Wallet → inventory → try Unlock passphrase → "
-      "on success decrypt all + TrueReweave with New passphrase. On fail: extract + queue crack "
+      "Open wallet.dat → ALWAYS rip apart (carve/inventory) → try Unlock passphrase → "
+      "on success decrypt all + TrueReweave with New passphrase. On fail: native KDF + Hashcat/John "
       "(that password first). Wrong passphrase cannot magic-unlock.");
   InputTextWithPaste("Unlock passphrase (try first)", app.breaker_unlock_pass,
                      sizeof(app.breaker_unlock_pass));
@@ -1764,6 +1788,8 @@ static void draw_breaker_rebuild_tab(AppState& app) {
   ImGui::Checkbox("On miss: also try dict/candidates", &app.breaker_try_dict);
   ImGui::SameLine();
   ImGui::Checkbox("Queue Hashcat", &app.breaker_queue_hashcat);
+  ImGui::SameLine();
+  ImGui::Checkbox("Queue John", &app.breaker_queue_john);
   InputTextWithPaste("Export prefix", app.breaker_out_prefix, sizeof(app.breaker_out_prefix));
 
   if (ImGui::Button("Open wallet.dat & Run Full Breaker", ImVec2(-1, 44))) {
@@ -1787,6 +1813,84 @@ static void draw_breaker_rebuild_tab(AppState& app) {
   if (app.has_reweave && !app.reweave_result.package.txt_bundle.empty()) {
     if (ImGui::Button("Copy TrueReweave export"))
       set_clipboard(app.reweave_result.package.txt_bundle);
+  }
+  ImGui::Separator();
+
+  /* Force Rebuild — always available without unlock */
+  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.35f, 0.25f, 1.f));
+  ImGui::TextWrapped("%s", force_rebuild_warning_banner().c_str());
+  ImGui::PopStyleColor();
+  ImGui::TextColored(ImVec4(0.95f, 0.55f, 0.35f, 1.f), "Force Rebuild (Experimental)");
+  ImGui::TextWrapped(
+      "Always available without unlock. Builds a NEW BIP39 key set + research mkey under your new "
+      "passphrase. Includes any UNENCRYPTED_KEY found during carve. Does NOT unlock original funds.");
+  ImGui::InputTextMultiline("New seedphrase (BIP39)##force", app.force_seedphrase,
+                            sizeof(app.force_seedphrase), ImVec2(-1, 60));
+  if (ImGui::Button("Generate BIP39 (12 words)##force")) {
+    std::string m, err;
+    if (bip39_generate_mnemonic(12, &m, &err)) {
+      std::strncpy(app.force_seedphrase, m.c_str(), sizeof(app.force_seedphrase) - 1);
+      app.log("[+] generated BIP39: " + m);
+    } else {
+      app.log("[E] BIP39 generate: " + err);
+    }
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Paste seedphrase##force")) {
+#ifdef _WIN32
+    const char* clip = clipboard_win32_get_utf8();
+    if (clip && clip[0])
+      std::strncpy(app.force_seedphrase, clip, sizeof(app.force_seedphrase) - 1);
+#endif
+  }
+  InputTextWithPaste("New passphrase (e.g. adam)##force", app.force_new_pass,
+                     sizeof(app.force_new_pass));
+  ImGui::InputInt("Research mkey iters##force", &app.force_iters);
+  InputTextWithPaste("Export folder##force", app.force_export_dir, sizeof(app.force_export_dir));
+  ImGui::Checkbox("Write experimental wallet.dat.reweave_new beside original", &app.force_write_side);
+  if (app.force_write_side) {
+    ImGui::Checkbox("I confirm: sidecar ONLY — never overwrites original wallet.dat",
+                    &app.force_confirm_side);
+  }
+  if (ImGui::Button("Run Force Rebuild (Experimental)", ImVec2(-1, 40))) {
+    if (!app.has_wallet && app.wallet_raw.empty()) {
+      app.log("[E] load / rip apart a wallet first (Extract or One-click)");
+    } else if (app.force_write_side && !app.force_confirm_side) {
+      app.log("[!] confirm sidecar write checkbox first");
+    } else {
+      ForceRebuildOptions fo;
+      fo.new_mnemonic = app.force_seedphrase;
+      fo.new_wallet_passphrase = app.force_new_pass;
+      fo.new_iterations = (uint32_t)(app.force_iters > 0 ? app.force_iters : 50000);
+      fo.export_dir = app.force_export_dir;
+      fo.write_side_wallet = app.force_write_side && app.force_confirm_side;
+      fo.original_wallet_path = app.wallet.path;
+      if (!app.has_carve) {
+        app.carve_report =
+            breaker_carve(app.wallet_raw.empty() ? nullptr : app.wallet_raw.data(),
+                          app.wallet_raw.size(), app.has_wallet ? &app.wallet : nullptr);
+        app.has_carve = true;
+      }
+      app.force_result = force_rebuild_experimental(app.wallet, app.wallet_raw, fo);
+      app.has_force = true;
+      app.log(app.force_result.message);
+      if (!app.force_result.export_dir_written.empty())
+        app.log("[+] wrote " + app.force_result.export_dir_written + "/force_rebuild.{json,txt}");
+      if (app.force_result.wrote_side_wallet)
+        app.log("[+] sidecar: " + app.force_result.side_wallet_path);
+      if (!app.force_result.mnemonic.empty())
+        std::strncpy(app.force_seedphrase, app.force_result.mnemonic.c_str(),
+                     sizeof(app.force_seedphrase) - 1);
+    }
+  }
+  if (app.has_force) {
+    ImGui::TextWrapped("%s", app.force_result.message.c_str());
+    if (ImGui::Button("Copy Force Rebuild TXT")) set_clipboard(app.force_result.txt_bundle);
+    ImGui::SameLine();
+    if (ImGui::Button("Copy Force Rebuild JSON")) set_clipboard(app.force_result.json_bundle);
+    ImGui::BeginChild("force_out", ImVec2(0, 120), true);
+    ImGui::TextUnformatted(app.force_result.txt_bundle.c_str());
+    ImGui::EndChild();
   }
   ImGui::Separator();
 
@@ -3048,7 +3152,8 @@ static void draw_lab_docs_tab(AppState& app) {
   ImGui::TextUnformatted("Workflow");
   ImGui::BulletText("Open Any Wallet / Extract: auto-detect Core (BTC/BCH/LTC/DOGE), ETH, Electrum, Exodus, MetaMask…");
   ImGui::BulletText("Salvage / Passphrase Lab / AES Partial / dual-verify (Core Recovery Lab).");
-  ImGui::BulletText("TrueReweave (Breaker tab 4): inventory + rematerialize — NO fake BIP39-in-Core rewrite.");
+  ImGui::BulletText("TrueReweave (Breaker tab 4): inventory + rematerialize AFTER unlock — NO fake BIP39-in-Core rewrite.");
+  ImGui::BulletText("Force Rebuild (Experimental): NEW BIP39 seed export + carve inventory — does NOT unlock original encrypted ckeys.");
   ImGui::BulletText("Outside Box: VSS, ghosts, leftovers, memory import, multi-mkey, Two-Body, CSV, Keyhole, Time-Slice, …");
   ImGui::BulletText("Tool Bay: full DFIR catalog + native pipelines wired into Open/Detect.");
   ImGui::BulletText("Verify: REAL/SUSPECT/FAKE/CORRUPT checklist (CLI --verify / --verify-plus).");
@@ -3062,10 +3167,13 @@ static void draw_lab_docs_tab(AppState& app) {
   ImGui::TextWrapped("%s", derivation_paths_markdown().c_str());
   ImGui::Separator();
   ImGui::TextUnformatted("Honesty");
+  ImGui::BulletText("There is NO magic bypass of wallet.dat AES/mkey without the passphrase or recovered key material.");
+  ImGui::BulletText("Only real levers: passphrase attack, partial AES, UNENCRYPTED keys, salvage scraps.");
   ImGui::BulletText("Commercial crackers are bridges — not embedded free.");
   ImGui::BulletText("Some GPU seed tools are experimental (clone/build).");
   ImGui::BulletText("On-chain labeling ≠ local passphrase/AES crack.");
   ImGui::BulletText("FORBIDDEN: inject BIP39 into classic Core wallet.dat (never stored there).");
+  ImGui::BulletText("Force Rebuild creates NEW keys — it does not unlock original encrypted funds.");
   ImGui::Separator();
   ImGui::TextUnformatted("Hibernation / RAM forensic guidance");
   ImGui::TextWrapped(

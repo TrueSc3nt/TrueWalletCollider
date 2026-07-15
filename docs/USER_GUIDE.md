@@ -46,7 +46,20 @@ Full inventory: [DFIR_CATALOG.md](DFIR_CATALOG.md).
 
 ### Breaker one-click
 
-On **Breaker & Rebuild**, use **Open wallet.dat & Run Full Breaker**: file dialog → Open Any Wallet → inventory summary → try **Unlock passphrase** (default example `adam`, editable; Ctrl+V or **Paste**) → on success decrypt all ckeys + TrueReweave rematerialize under **New passphrase for rebuilt wallet** (can mirror unlock) → export WIF/JSON. On fail it still extracts / exports hash and queues native KDF + Hashcat with that password as the first candidate (`trying…` in the progress log). Wrong passphrase cannot magic-unlock.
+On **Breaker & Rebuild**, use **Open wallet.dat & Run Full Breaker**: file dialog → Open Any Wallet → **always rip apart** (carve + inventory) → try **Unlock passphrase** (default example `adam`, editable; Ctrl+V or **Paste**) → on success decrypt all ckeys + TrueReweave rematerialize under **New passphrase for rebuilt wallet** (can mirror unlock) → export WIF/JSON. On fail it still extracts / exports hash and queues native KDF + Hashcat + John with that password as the first candidate (`trying…` in the progress log).
+
+**There is no magic bypass** of wallet.dat AES/mkey encryption without the correct passphrase (or recovered key material). Wrong passphrase cannot unlock original encrypted funds.
+
+### Force Rebuild (Experimental)
+
+Always available **without** unlock on the Breaker tab:
+
+1. Enter or **Generate** a new BIP39 seedphrase + new passphrase (e.g. `adam`).
+2. Run **Force Rebuild** → writes `rebuilt_NEW_wallet_EXPORT/` with JSON + WIFs of the **NEW** seed, research mkey blob, xprv/xpub, sample BIP44 addresses.
+3. Any **UNENCRYPTED_KEY** found during carve is included (real salvage).
+4. Optional **wallet.dat.reweave_new** sidecar beside the original (second confirmation) — **never** overwrites the original by default.
+
+**Honest scope:** Force Rebuild does **not** decrypt original encrypted `ckey` blobs and does **not** unlock original funds. It creates a **different** key set from your new seed for research / rematerialization. Correct-passphrase path remains: unlock → decrypt old keys → TrueReweave under a new passphrase.
 
 ### Clipboard (Ctrl+V)
 
@@ -142,6 +155,8 @@ See [README.md](../README.md#cli) for full flags. High-value:
 
 ## Honesty limits
 
+- **No bypass** of wallet.dat AES/mkey encryption without the passphrase or recovered key material.
+- Force Rebuild (Experimental) creates **new** keys from a new BIP39 seed — it does **not** unlock original encrypted funds.
 - No miracle AES-256 full-key break.
 - No silent memory malware.
 - VSS copy requires elevation you approve.

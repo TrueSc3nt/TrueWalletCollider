@@ -58,6 +58,13 @@ bool bip39_load_wordlist(std::vector<std::string>* words_out, std::string* err =
 
 Bip39Result bip39_validate_mnemonic(const std::string& mnemonic);
 
+/** Generate a BIP39 English mnemonic (12 or 24 words). */
+bool bip39_generate_mnemonic(int word_count, std::string* mnemonic_out, std::string* err = nullptr);
+
+/** BIP39 mnemonic → 64-byte seed (PBKDF2-HMAC-SHA512, 2048 rounds). */
+bool bip39_mnemonic_to_seed(const std::string& mnemonic, const std::string& passphrase,
+                            uint8_t seed64[64], std::string* err = nullptr);
+
 BrainwalletResult brainwallet_sha256_to_wif(const std::string& passphrase);
 
 std::string base58_encode_hex(const std::string& hex_payload);

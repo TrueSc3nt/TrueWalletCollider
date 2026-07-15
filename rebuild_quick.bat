@@ -10,5 +10,6 @@ if errorlevel 1 exit /b 1
 if exist build\TrueWalletCollider.exe copy /y build\TrueWalletCollider.exe TrueWalletCollider.exe >nul
 TrueWalletCollider.exe --experiment secp
 TrueWalletCollider.exe --experiment passphrase
+TrueWalletCollider.exe --experiment force_rebuild
 TrueWalletCollider.exe --partial-help
 endlocal

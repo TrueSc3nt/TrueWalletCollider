@@ -33,6 +33,12 @@ bool aes256_cbc_decrypt(const uint8_t* key32, const uint8_t* iv16,
 std::string base58_encode(const uint8_t* data, size_t len);
 std::string privkey_to_wif(const uint8_t priv[32], bool compressed);
 
+/** HASH160 = RIPEMD160(SHA256(data)). */
+void hash160(const uint8_t* data, size_t len, uint8_t out20[20]);
+
+/** Compressed/uncompressed pubkey → mainnet P2PKH address. */
+std::string pubkey_to_p2pkh(const uint8_t* pubkey, size_t pubkey_len);
+
 /** IV = first 16 bytes of SHA256(SHA256(pubkey)). */
 bool iv_from_pubkey(const uint8_t* pubkey, size_t pubkey_len, uint8_t iv16[16],
                     uint8_t dsha32[32]);
